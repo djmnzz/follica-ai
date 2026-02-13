@@ -29,46 +29,187 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Fix EXIF rotation and return normalized buffer + metadata
+// ──────────────────────────────────────────────
+// IMAGE UTILITIES
+// ──────────────────────────────────────────────
+
 async function normalizeImage(buffer) {
-  const normalized = await sharp(buffer).rotate().jpeg({ quality: 92 }).toBuffer();
+  const normalized = await sharp(buffer).rotate().jpeg({ quality: 93 }).toBuffer();
   const metadata = await sharp(normalized).metadata();
   return { buffer: normalized, width: metadata.width, height: metadata.height };
 }
 
-// Generate a mask image: white on top (area to inpaint = hair), black on bottom (preserve)
-// The mask covers roughly the top 45% of the image with a soft oval shape
-// to target the scalp/hair area while leaving face, ears, beard untouched
-async function generateHairMask(width, height) {
-  // Create an SVG mask with an ellipse covering the top of the head
-  // The ellipse is wide and positioned in the upper portion
-  const centerX = Math.round(width / 2);
-  const centerY = Math.round(height * 0.15); // high up, just the top/crown
-  const radiusX = Math.round(width * 0.28);  // narrow — leave side hair visible as color reference
-  const radiusY = Math.round(height * 0.18); // short — just the bald area on top
-
-  const svgMask = `
-    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="${width}" height="${height}" fill="black"/>
-      <ellipse cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" fill="white"/>
-    </svg>
-  `;
-
-  const maskBuffer = await sharp(Buffer.from(svgMask))
-    .jpeg({ quality: 90 })
-    .toBuffer();
-
-  return maskBuffer;
+function getAspectRatioString(w, h) {
+  const ratio = w / h;
+  if (ratio > 1.6) return '16:9';
+  if (ratio > 1.3) return '3:2';
+  if (ratio > 1.1) return '4:3';
+  if (ratio > 0.9) return '1:1';
+  if (ratio > 0.7) return '3:4';
+  if (ratio > 0.55) return '2:3';
+  return '9:16';
 }
 
-// Models to try: flux-fill-pro first (best inpainting), then flux-fill-dev as fallback
-const FILL_MODELS = [
-  'black-forest-labs/flux-fill-pro',
-  'black-forest-labs/flux-fill-dev'
-];
+// ──────────────────────────────────────────────
+// COLOR SAMPLING
+// Sample average hair color from the sides of the original image
+// (where existing hair is) — rows 20-35%, left 5-15% and right 85-95%
+// ──────────────────────────────────────────────
+async function sampleHairColor(rawBuffer, width, height) {
+  const y1 = Math.round(height * 0.20);
+  const y2 = Math.round(height * 0.35);
+  const xLeftStart = Math.round(width * 0.03);
+  const xLeftEnd = Math.round(width * 0.15);
+  const xRightStart = Math.round(width * 0.85);
+  const xRightEnd = Math.round(width * 0.97);
 
-// Fallback: flux-kontext if fill models fail
-const KONTEXT_MODELS = [
+  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+
+  for (let y = y1; y < y2; y++) {
+    // Left side
+    for (let x = xLeftStart; x < xLeftEnd; x++) {
+      const idx = (y * width + x) * 3;
+      rSum += rawBuffer[idx];
+      gSum += rawBuffer[idx + 1];
+      bSum += rawBuffer[idx + 2];
+      count++;
+    }
+    // Right side
+    for (let x = xRightStart; x < xRightEnd; x++) {
+      const idx = (y * width + x) * 3;
+      rSum += rawBuffer[idx];
+      gSum += rawBuffer[idx + 1];
+      bSum += rawBuffer[idx + 2];
+      count++;
+    }
+  }
+
+  return {
+    r: Math.round(rSum / count),
+    g: Math.round(gSum / count),
+    b: Math.round(bSum / count)
+  };
+}
+
+// Sample the color of the AI-generated hair from the top-center area
+async function sampleAIHairColor(rawBuffer, width, height) {
+  const y1 = Math.round(height * 0.05);
+  const y2 = Math.round(height * 0.25);
+  const xStart = Math.round(width * 0.25);
+  const xEnd = Math.round(width * 0.75);
+
+  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+
+  for (let y = y1; y < y2; y++) {
+    for (let x = xStart; x < xEnd; x++) {
+      const idx = (y * width + x) * 3;
+      rSum += rawBuffer[idx];
+      gSum += rawBuffer[idx + 1];
+      bSum += rawBuffer[idx + 2];
+      count++;
+    }
+  }
+
+  return {
+    r: Math.round(rSum / count),
+    g: Math.round(gSum / count),
+    b: Math.round(bSum / count)
+  };
+}
+
+// ──────────────────────────────────────────────
+// PIXEL-LEVEL COMPOSITING WITH COLOR CORRECTION
+// 1. Sample original hair color from sides
+// 2. Sample AI hair color from top
+// 3. Calculate color shift needed
+// 4. Apply shift to AI pixels in hair zone
+// 5. Blend: top = color-corrected AI, bottom = original
+// ──────────────────────────────────────────────
+async function compositeHairOnly(originalBuffer, aiBuffer, width, height) {
+  const aiResized = await sharp(aiBuffer)
+    .resize(width, height, { fit: 'fill' })
+    .raw()
+    .toBuffer();
+
+  const originalRaw = await sharp(originalBuffer)
+    .raw()
+    .toBuffer();
+
+  // Sample colors
+  const origColor = await sampleHairColor(originalRaw, width, height);
+  const aiColor = await sampleAIHairColor(aiResized, width, height);
+
+  // Calculate color correction (shift AI color toward original)
+  // Use a ratio-based approach for more natural correction
+  const rRatio = origColor.r / Math.max(aiColor.r, 1);
+  const gRatio = origColor.g / Math.max(aiColor.g, 1);
+  const bRatio = origColor.b / Math.max(aiColor.b, 1);
+
+  // Clamp ratios to avoid extreme corrections (max 50% shift)
+  const clampRatio = (r) => Math.max(0.6, Math.min(1.5, r));
+  const rAdj = clampRatio(rRatio);
+  const gAdj = clampRatio(gRatio);
+  const bAdj = clampRatio(bRatio);
+
+  console.log(`[Color] Original hair: RGB(${origColor.r},${origColor.g},${origColor.b})`);
+  console.log(`[Color] AI hair: RGB(${aiColor.r},${aiColor.g},${aiColor.b})`);
+  console.log(`[Color] Correction ratios: R=${rAdj.toFixed(2)} G=${gAdj.toFixed(2)} B=${bAdj.toFixed(2)}`);
+
+  // Composite with color correction
+  const pixels = width * height * 3;
+  const output = Buffer.alloc(pixels);
+
+  const blendStart = Math.round(height * 0.30);
+  const blendEnd = Math.round(height * 0.45);
+  const blendRange = blendEnd - blendStart;
+
+  for (let y = 0; y < height; y++) {
+    let aiWeight;
+    if (y < blendStart) {
+      aiWeight = 1.0;
+    } else if (y >= blendEnd) {
+      aiWeight = 0.0;
+    } else {
+      const t = (y - blendStart) / blendRange;
+      aiWeight = 0.5 + 0.5 * Math.cos(Math.PI * t);
+    }
+
+    const origWeight = 1.0 - aiWeight;
+
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 3;
+
+      // Color-correct the AI pixels (only where aiWeight > 0)
+      let aiR = aiResized[idx];
+      let aiG = aiResized[idx + 1];
+      let aiB = aiResized[idx + 2];
+
+      if (aiWeight > 0) {
+        // Only color-correct darker pixels (likely hair, not background/skin)
+        const brightness = (aiR + aiG + aiB) / 3;
+        if (brightness < 180) { // skip very bright pixels (background, skin highlights)
+          aiR = Math.min(255, Math.round(aiR * rAdj));
+          aiG = Math.min(255, Math.round(aiG * gAdj));
+          aiB = Math.min(255, Math.round(aiB * bAdj));
+        }
+      }
+
+      output[idx]     = Math.round(aiR * aiWeight + originalRaw[idx]     * origWeight);
+      output[idx + 1] = Math.round(aiG * aiWeight + originalRaw[idx + 1] * origWeight);
+      output[idx + 2] = Math.round(aiB * aiWeight + originalRaw[idx + 2] * origWeight);
+    }
+  }
+
+  return sharp(output, { raw: { width, height, channels: 3 } })
+    .jpeg({ quality: 93 })
+    .toBuffer();
+}
+
+// ──────────────────────────────────────────────
+// AI MODEL INTERACTION
+// ──────────────────────────────────────────────
+
+const MODELS = [
   'black-forest-labs/flux-kontext-max',
   'black-forest-labs/flux-kontext-pro'
 ];
@@ -84,98 +225,98 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 
     const density = req.body.density || 'medium';
 
-    // Step 1: Normalize image (fix EXIF rotation)
-    const { buffer: imgBuffer, width, height } = await normalizeImage(req.file.buffer);
-    const base64Image = `data:image/jpeg;base64,${imgBuffer.toString('base64')}`;
+    // Step 1: Normalize (fix EXIF rotation)
+    const { buffer: originalBuffer, width, height } = await normalizeImage(req.file.buffer);
+    const base64Image = `data:image/jpeg;base64,${originalBuffer.toString('base64')}`;
+    const aspectRatio = getAspectRatioString(width, height);
 
-    // Step 2: Generate mask (white = area to fill with hair)
-    const maskBuffer = await generateHairMask(width, height);
-    const base64Mask = `data:image/jpeg;base64,${maskBuffer.toString('base64')}`;
+    const prompt = buildPrompt(density);
+    console.log(`[Generate] ${width}x${height} (${aspectRatio}), Density: ${density}`);
 
-    console.log(`[Generate] Image: ${width}x${height}, Density: ${density}`);
+    // Step 2: Generate with Flux Kontext
+    let aiOutputUrl = null;
+    let usedModel = null;
 
-    // Step 3: Try flux-fill models (with mask - guarantees face/beard/ears untouched)
-    const fillPrompt = buildFillPrompt(density);
-    console.log(`[Generate] Fill prompt: ${fillPrompt}`);
-
-    for (const model of FILL_MODELS) {
+    for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
         console.log(`[Generate] ${model} attempt ${attempt}...`);
         try {
-          const result = await runFillModel(model, base64Image, base64Mask, fillPrompt);
+          const result = await runModel(model, base64Image, prompt, aspectRatio);
           if (result.success) {
-            console.log(`[Generate] ✅ Success with ${model}!`);
-            return res.json({ success: true, outputUrl: result.outputUrl, model });
+            aiOutputUrl = result.outputUrl;
+            usedModel = model;
+            break;
           }
-          console.log(`[Generate] ${model} failed: ${result.error}`);
+          console.log(`[Generate] failed: ${result.error}`);
         } catch (err) {
-          console.log(`[Generate] ${model} error: ${err.message}`);
+          console.log(`[Generate] error: ${err.message}`);
         }
         if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
       }
+      if (aiOutputUrl) break;
     }
 
-    // Step 4: Fallback to kontext (no mask, but better than nothing)
-    console.log('[Generate] Fill models failed, trying Kontext fallback...');
-    const kontextPrompt = buildKontextPrompt(density);
-    const ratio = width / height;
-    let aspectRatio = '1:1';
-    if (ratio > 1.6) aspectRatio = '16:9';
-    else if (ratio > 1.3) aspectRatio = '3:2';
-    else if (ratio > 1.1) aspectRatio = '4:3';
-    else if (ratio > 0.9) aspectRatio = '1:1';
-    else if (ratio > 0.7) aspectRatio = '3:4';
-    else if (ratio > 0.55) aspectRatio = '2:3';
-    else aspectRatio = '9:16';
-
-    for (const model of KONTEXT_MODELS) {
-      try {
-        const result = await runKontextModel(model, base64Image, kontextPrompt, aspectRatio);
-        if (result.success) {
-          console.log(`[Generate] ✅ Fallback success with ${model}!`);
-          return res.json({ success: true, outputUrl: result.outputUrl, model });
-        }
-      } catch (err) {
-        console.log(`[Generate] ${model} fallback error: ${err.message}`);
-      }
+    if (!aiOutputUrl) {
+      return res.status(500).json({ error: 'AI models busy. Try again.' });
     }
 
-    return res.status(500).json({ error: 'All models busy. Please try again.' });
+    // Step 3: Download AI result
+    console.log(`[Composite] Downloading AI result...`);
+    let aiBuffer;
+    try {
+      const aiResponse = await fetch(aiOutputUrl);
+      if (!aiResponse.ok) throw new Error(`HTTP ${aiResponse.status}`);
+      aiBuffer = Buffer.from(await aiResponse.arrayBuffer());
+      console.log(`[Composite] Downloaded ${aiBuffer.length} bytes`);
+    } catch (dlErr) {
+      console.log(`[Composite] Download failed, returning raw URL`);
+      return res.json({ success: true, outputUrl: aiOutputUrl, model: usedModel });
+    }
+
+    // Step 4: Color-correct + Composite
+    console.log(`[Composite] Color correcting and blending...`);
+    const finalBuffer = await compositeHairOnly(originalBuffer, aiBuffer, width, height);
+
+    // Step 5: Return as base64
+    const finalBase64 = `data:image/jpeg;base64,${finalBuffer.toString('base64')}`;
+    console.log(`[Generate] ✅ Done! ${usedModel} + color-corrected composite`);
+
+    return res.json({
+      success: true,
+      outputUrl: finalBase64,
+      model: usedModel
+    });
+
   } catch (error) {
-    console.error('[Generate] Server error:', error.message);
+    console.error('[Generate] Error:', error.message, error.stack);
     res.status(500).json({ error: 'Server error', detail: error.message });
   }
 });
 
-async function runFillModel(model, image, mask, prompt) {
-  const input = {
-    image: image,
-    mask: mask,
-    prompt: prompt,
-    output_quality: 95
-  };
-
-  // flux-fill-dev uses different params than pro
-  if (model.includes('dev')) {
-    input.guidance = 30;
-    input.num_inference_steps = 30;
-  }
-
+async function runModel(model, image, prompt, aspectRatio) {
   const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
-      'Prefer': 'wait=90'
+      'Prefer': 'wait=60'
     },
-    body: JSON.stringify({ input })
+    body: JSON.stringify({
+      input: {
+        prompt: prompt,
+        input_image: image,
+        aspect_ratio: aspectRatio,
+        safety_tolerance: 5,
+        output_quality: 95
+      }
+    })
   });
 
   const prediction = await createResponse.json();
   console.log(`[${model}] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
 
   if (!createResponse.ok) {
-    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 300) };
+    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
   }
 
   if (prediction.status === 'succeeded' && prediction.output) {
@@ -200,48 +341,6 @@ async function runFillModel(model, image, mask, prompt) {
   return { success: false, error: 'Unexpected response' };
 }
 
-async function runKontextModel(model, image, prompt, aspectRatio) {
-  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'wait=60'
-    },
-    body: JSON.stringify({
-      input: {
-        prompt: prompt,
-        input_image: image,
-        aspect_ratio: aspectRatio,
-        safety_tolerance: 5,
-        output_quality: 95
-      }
-    })
-  });
-
-  const prediction = await createResponse.json();
-  if (!createResponse.ok) {
-    return { success: false, error: prediction.detail || 'API error' };
-  }
-
-  if (prediction.status === 'succeeded' && prediction.output) {
-    const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
-    return { success: true, outputUrl };
-  }
-
-  if (prediction.id) {
-    const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
-    const result = await pollPrediction(pollUrl);
-    if (result.status === 'succeeded' && result.output) {
-      const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
-      return { success: true, outputUrl };
-    }
-    return { success: false, error: result.error || 'Failed' };
-  }
-
-  return { success: false, error: 'Unexpected' };
-}
-
 async function pollPrediction(url) {
   const maxAttempts = 40;
   let attempts = 0;
@@ -258,25 +357,14 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
-function buildFillPrompt(density) {
-  const densityMap = {
-    low: 'natural, moderate',
-    medium: 'full, thick',
-    high: 'very thick, dense'
-  };
-  const d = densityMap[density] || densityMap.medium;
-  // For inpainting, describe ONLY what should fill the masked area
-  return `${d} natural men's hair, laying flat and neat, not sticking up. The hair color MUST be exactly the same shade as the existing hair on the sides — do NOT darken it, do NOT make it black or dark brown unless the original is that color. Do NOT add, reveal, or modify any ears. Natural realistic hairline with full coverage at the temples. Photorealistic.`;
-}
-
-function buildKontextPrompt(density) {
+function buildPrompt(density) {
   const densityMap = {
     low: 'a natural amount of',
     medium: 'a full head of',
     high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
-  return `Make this person have ${d} natural hair covering their entire head including the temples and hairline — no receding hairline, no bald spots, full coverage from forehead to crown. The hair should lay flat and neat, not sticking up, like a normal short-to-medium men's hairstyle. Same hair color, same beard, same everything else. If ears are not visible in the photo, do NOT add or reveal ears — keep them hidden.`;
+  return `Make this person have ${d} natural hair on top. Same hair color, same beard, same everything else.`;
 }
 
 app.get('*', (req, res) => {
@@ -285,10 +373,10 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🎯 Primary: Flux Fill Pro/Dev (masked inpainting)`);
-  console.log(`🔄 Fallback: Flux Kontext Max/Pro`);
-  console.log(`📸 EXIF rotation fix: enabled`);
-  console.log(`🎭 Auto-mask: top-of-head ellipse`);
-  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`🌐 Open: http://localhost:${PORT}\n`);
+  console.log(`🎯 AI: Flux Kontext Max > Pro`);
+  console.log(`🎨 Color correction: sample sides → match AI hair`);
+  console.log(`🎭 Composite: top=AI hair, bottom=original photo`);
+  console.log(`📸 EXIF fix: enabled`);
+  console.log(`📡 Token: ${REPLICATE_API_TOKEN ? '✅' : '❌'}`);
+  console.log(`🌐 http://localhost:${PORT}\n`);
 });
