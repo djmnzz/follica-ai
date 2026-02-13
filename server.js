@@ -174,7 +174,7 @@ function buildHairPrompt(density) {
   };
   const d = densityMap[density] || densityMap.medium;
 
-  return `Make this person have ${d} natural hair covering their entire head including the temples and hairline — no receding hairline, no bald spots, full coverage from forehead to crown. The hair should lay flat and neat, not sticking up, like a normal short-to-medium men's hairstyle. Same hair color, same beard, same ears, same everything else. Do not modify the ears at all.`;
+  return `Make this person have ${d} natural hair covering their entire head including the temples and hairline — no receding hairline, no bald spots, full coverage from forehead to crown. The hair should lay flat and neat, not sticking up, like a normal short-to-medium men's hairstyle. Same hair color, same beard, same everything else. If ears are not visible in the photo, do NOT add or reveal ears — keep them hidden.`;
 }
 
 app.get('*', (req, res) => {
