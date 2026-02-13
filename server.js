@@ -28,7 +28,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '10.0 - Beckham Style & Face Lock'
+    version: '11.0 - Professional Descriptive Style (No Celebs)'
   });
 });
 
@@ -50,7 +50,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const prompt = buildHairPrompt(style, density, hairline);
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting PRO Realistic Vision - Style: ${style}`);
+    console.log(`[Generate] Starting PRO Descriptive - Style: ${style}`);
 
     const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
@@ -60,13 +60,13 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
-        // CAMBIO DE MODELO: Usamos Realistic Vision V5.1 (mejor para mantener caras)
+        // Usamos Realistic Vision V5.1 (Excelente para realismo y respetar caras)
         version: "9936c2001faa2194a261c01381f90e65261879985476014a0a37a334593a05eb",
         input: {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          // 0.35 es el balance perfecto: suficiente para poner pelo Beckham, pero bajo para no tocar la cara.
+          // Mantenemos 0.35 para proteger la identidad facial
           prompt_strength: 0.35,
           num_inference_steps: 40,
           guidance_scale: 7,
@@ -145,27 +145,19 @@ async function pollPrediction(url) {
   throw new Error('Prediction timed out after 3 minutes');
 }
 
-// PROMPTS PROFESIONALES ESTILO BECKHAM
+// PROMPTS DESCRIPTIVOS PROFESIONALES (SIN NOMBRES DE CELEBRIDADES)
 function buildHairPrompt(style, density, hairline) {
-  // Mapeos simplificados, el peso lo lleva la referencia a Beckham
-  const densityMap = {
-    low: 'full density',
-    medium: 'high density',
-    high: 'maximum density'
-  };
-  const styleMap = {
-    natural: 'textured and styled naturally',
-    dense: 'thick and robustly styled',
-    subtle: 'neatly groomed'
-  };
+  // Mapeos simples
+  const densityMap = { low: 'full density', medium: 'high density', high: 'maximum density' };
+  const styleMap = { natural: 'textured natural look', dense: 'thick robust look', subtle: 'neatly groomed look' };
 
-  // Prompt directo y específico
-  return `Based on image_0.png, the man now has a full head of thick, healthy hair styled like David Beckham. All receding areas and bald spots are completely filled in with a perfect, sharp, youthful hairline. The hair has realistic texture and volume. Crucially, the man's face, facial structure, skin, eyes, expression, clothing, and the background are absolutely identical to image_0.png. Only the hair changed. Photorealistic, 8k.`;
+  // Prompt descriptivo enfocado en calidad y cobertura total sin referencias a personas famosas
+  return `Based on image_0.png, the man now has a full head of ultra-thick, dense, healthy hair. It is a modern, professionally groomed hairstyle with perfect volume. All receding areas and bald spots are completely filled in with a sharp, flawless, youthful hairline with absolutely no recession. The hair texture is realistic. Crucially, the man's face, facial structure, skin, eyes, expression, clothing, and the background are absolutely identical to image_0.png. Only the hair changed. Photorealistic, 8k, highly detailed.`;
 }
 
 function buildNegativePrompt() {
   // Prohibimos explícitamente cambiar la cara
-  return 'changed face, different person, altered facial features, plastic surgery look, distorted face, blurry eyes, receding hairline, bald spots, thinning hair, low quality, ugly, deformed, watermark, text';
+  return 'changed face, different person, altered facial features, plastic surgery look, distorted face, blurry eyes, receding hairline, bald spots, thinning hair, low quality, ugly, deformed, watermark, text, celebrity lookalike';
 }
 
 // Serve frontend
