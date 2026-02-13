@@ -43,9 +43,9 @@ async function generateHairMask(width, height) {
   // Create an SVG mask with an ellipse covering the top of the head
   // The ellipse is wide and positioned in the upper portion
   const centerX = Math.round(width / 2);
-  const centerY = Math.round(height * 0.22); // center of ellipse near top
-  const radiusX = Math.round(width * 0.38);  // wide enough to cover temples
-  const radiusY = Math.round(height * 0.25); // tall enough to cover crown
+  const centerY = Math.round(height * 0.18); // higher up to avoid ears
+  const radiusX = Math.round(width * 0.35);  // slightly narrower to avoid ears on sides
+  const radiusY = Math.round(height * 0.22); // shorter to stay above ear level
 
   const svgMask = `
     <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
@@ -266,7 +266,7 @@ function buildFillPrompt(density) {
   };
   const d = densityMap[density] || densityMap.medium;
   // For inpainting, describe ONLY what should fill the masked area
-  return `${d} natural men's hair, laying flat and neat, not sticking up. The hair color must be the same color as the hair visible on the sides of the head — do not default to black or dark brown. Natural realistic hairline with full coverage at the temples. Photorealistic.`;
+  return `${d} natural men's hair, laying flat and neat, not sticking up. The hair color MUST be exactly the same shade as the existing hair on the sides — do NOT darken it, do NOT make it black or dark brown unless the original is that color. Do NOT add, reveal, or modify any ears. Natural realistic hairline with full coverage at the temples. Photorealistic.`;
 }
 
 function buildKontextPrompt(density) {
