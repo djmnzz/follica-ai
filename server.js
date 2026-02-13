@@ -168,17 +168,12 @@ async function pollPrediction(url) {
 
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'slightly thicker hair',
-    medium: 'noticeably fuller hair with good natural coverage',
-    high: 'a full thick head of hair with maximum natural density'
-  };
-  const hairlineDesc = {
-    'age-appropriate': '',
-    'youthful': ' with a lower, more youthful hairline',
-    'mature': ' keeping the mature hairline shape'
+    low: 'slightly more hair',
+    medium: 'a full natural head of hair',
+    high: 'thick dense hair with maximum coverage'
   };
 
-  return `Keep this exact same person, same face, same expression, same skin, same ears, same beard, same facial hair, same clothing, same background, same lighting, same camera angle, same image orientation. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas on TOP of their head/scalp${hairlineDesc[hairline] || ''}. CRITICAL RULES: 1) The new hair must be the EXACT SAME COLOR, tone, shade, and texture as the person's existing hair — match their current hair color precisely, do not darken it, lighten it, or change it in any way. 2) Do NOT modify the ears, beard, mustache, facial hair, sideburns, eyebrows, forehead shape, face shape, jawline, or any facial feature — all must remain completely untouched and identical to the original. 3) ONLY add hair to the TOP of the head where there is balding or thinning — do not touch anything below the forehead. 4) The hair must look like real natural human hair with natural volume, natural strands, slight imperfections, and realistic scalp visibility — not a wig, not artificial, as if photographed after a real hair transplant. 5) Keep the exact same photo orientation, do not rotate or flip the image.`;
+  return `Look at this person's existing hair color carefully. Now give this same identical person ${densityDesc[density] || densityDesc.medium} covering ALL bald and thinning areas on the top of their head. Fill in the temples and front completely — NO receding hairline, NO bald spots, NO thin patches, NO visible scalp where there was balding. The new hair MUST be the IDENTICAL color and shade as the hair this person already has on the sides and back of their head — sample the exact color from their existing hair. Do NOT make it darker, do NOT make it lighter, do NOT change the hue. Do NOT touch ANYTHING below the forehead: same face, same eyes, same nose, same mouth, same ears, same beard, same mustache, same facial hair, same sideburns, same eyebrows, same skin, same wrinkles, same clothing, same background, same lighting, same camera angle. Do NOT rotate or flip the image. The hair should look completely natural and real, like a professional photograph — with individual strands visible, natural volume, and the way real hair falls naturally. Not a wig, not artificial, not computer generated looking.`;
 }
 
 app.get('*', (req, res) => {
