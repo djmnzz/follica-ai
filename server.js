@@ -167,7 +167,7 @@ function buildHairPrompt(style, density, hairline) {
     'mature': ' keeping the mature hairline shape'
   };
 
-  return `Keep this exact same person, same face, same expression, same skin, same clothing, same background, same lighting, same camera angle. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas of their scalp${hairlineDesc[hairline] || ''}. The added hair must match their existing hair color and texture perfectly. Everything else must be identical to the original photo.`;
+  return `Keep this exact same person, same face, same expression, same skin, same clothing, same background, same lighting, same camera angle. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas of their scalp${hairlineDesc[hairline] || ''}. CRITICAL: the new hair must be the EXACT SAME COLOR, tone, and texture as the person's existing hair — match their current hair color precisely, do not darken it, lighten it, or change it in any way. If they have brown hair, add brown hair. If they have black hair, add black hair. If they have gray hair, add gray hair. Everything else must be identical to the original photo.`;
 }
 
 app.get('*', (req, res) => {
