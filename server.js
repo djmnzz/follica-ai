@@ -66,22 +66,29 @@ async function sampleHairColor(rawBuffer, width, height) {
   let rSum = 0, gSum = 0, bSum = 0, count = 0;
 
   for (let y = y1; y < y2; y++) {
-    // Left side
     for (let x = xLeftStart; x < xLeftEnd; x++) {
       const idx = (y * width + x) * 3;
-      rSum += rawBuffer[idx];
-      gSum += rawBuffer[idx + 1];
-      bSum += rawBuffer[idx + 2];
-      count++;
+      const r = rawBuffer[idx], g = rawBuffer[idx+1], b = rawBuffer[idx+2];
+      const brightness = (r + g + b) / 3;
+      // Only sample dark-ish pixels (likely hair, not bright background/windows/skin)
+      if (brightness > 30 && brightness < 140) {
+        rSum += r; gSum += g; bSum += b; count++;
+      }
     }
-    // Right side
     for (let x = xRightStart; x < xRightEnd; x++) {
       const idx = (y * width + x) * 3;
-      rSum += rawBuffer[idx];
-      gSum += rawBuffer[idx + 1];
-      bSum += rawBuffer[idx + 2];
-      count++;
+      const r = rawBuffer[idx], g = rawBuffer[idx+1], b = rawBuffer[idx+2];
+      const brightness = (r + g + b) / 3;
+      if (brightness > 30 && brightness < 140) {
+        rSum += r; gSum += g; bSum += b; count++;
+      }
     }
+  }
+
+  // If not enough dark pixels found, disable color correction
+  if (count < 50) {
+    console.log(`[Color] Not enough hair pixels found (${count}), skipping correction`);
+    return null;
   }
 
   return {
@@ -139,21 +146,24 @@ async function compositeHairOnly(originalBuffer, aiBuffer, width, height) {
   const origColor = await sampleHairColor(originalRaw, width, height);
   const aiColor = await sampleAIHairColor(aiResized, width, height);
 
-  // Calculate color correction (shift AI color toward original)
-  // Use a ratio-based approach for more natural correction
-  const rRatio = origColor.r / Math.max(aiColor.r, 1);
-  const gRatio = origColor.g / Math.max(aiColor.g, 1);
-  const bRatio = origColor.b / Math.max(aiColor.b, 1);
+  // Calculate color correction ratios (only if we got valid samples)
+  let rAdj = 1.0, gAdj = 1.0, bAdj = 1.0;
+  if (origColor && aiColor) {
+    const rRatio = origColor.r / Math.max(aiColor.r, 1);
+    const gRatio = origColor.g / Math.max(aiColor.g, 1);
+    const bRatio = origColor.b / Math.max(aiColor.b, 1);
 
-  // Clamp ratios to avoid extreme corrections (max 50% shift)
-  const clampRatio = (r) => Math.max(0.6, Math.min(1.5, r));
-  const rAdj = clampRatio(rRatio);
-  const gAdj = clampRatio(gRatio);
-  const bAdj = clampRatio(bRatio);
+    const clampRatio = (r) => Math.max(0.75, Math.min(1.3, r));
+    rAdj = clampRatio(rRatio);
+    gAdj = clampRatio(gRatio);
+    bAdj = clampRatio(bRatio);
 
-  console.log(`[Color] Original hair: RGB(${origColor.r},${origColor.g},${origColor.b})`);
-  console.log(`[Color] AI hair: RGB(${aiColor.r},${aiColor.g},${aiColor.b})`);
-  console.log(`[Color] Correction ratios: R=${rAdj.toFixed(2)} G=${gAdj.toFixed(2)} B=${bAdj.toFixed(2)}`);
+    console.log(`[Color] Original hair: RGB(${origColor.r},${origColor.g},${origColor.b})`);
+    console.log(`[Color] AI hair: RGB(${aiColor.r},${aiColor.g},${aiColor.b})`);
+    console.log(`[Color] Correction: R=${rAdj.toFixed(2)} G=${gAdj.toFixed(2)} B=${bAdj.toFixed(2)}`);
+  } else {
+    console.log(`[Color] Skipping correction — insufficient hair samples`);
+  }
 
   // Composite with color correction
   const pixels = width * height * 3;
