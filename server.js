@@ -15,7 +15,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Multer for file uploads (memory storage)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
     else cb(new Error('Only image files allowed'), false);
@@ -35,9 +35,8 @@ app.get('/api/health', (req, res) => {
 app.post('/api/generate', upload.single('image'), async (req, res) => {
   try {
     if (!REPLICATE_API_TOKEN) {
-      return res.status(500).json({ error: 'API token not configured. Set REPLICATE_API_TOKEN environment variable.' });
+      return res.status(500).json({ error: 'API token not configured.' });
     }
-
     if (!req.file) {
       return res.status(400).json({ error: 'No image uploaded' });
     }
@@ -47,64 +46,75 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
 
-    // Build prompt optimized for hair transplant
     const prompt = buildHairPrompt(style, density, hairline);
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting prediction - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+    console.log(`[Generate] Starting - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
-    // Create prediction with Replicate
-    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
+    // Use the official Replicate model endpoint (no version hash needed)
+    const createResponse = await fetch('https://api.replicate.com/v1/models/stability-ai/stable-diffusion-img2img/predictions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Prefer': 'wait'
       },
       body: JSON.stringify({
-        version: "a07f252abbbd832009640b27f063ea52d87d7a23a185ca165bec23b5b8e59505",
         input: {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
           num_inference_steps: 30,
           guidance_scale: 7.5,
-          strength: 0.45,
+          prompt_strength: 0.45,
           scheduler: "K_EULER_ANCESTRAL"
         }
       })
     });
 
+    const responseText = await createResponse.text();
+    console.log(`[Generate] API response status: ${createResponse.status}`);
+
+    let prediction;
+    try {
+      prediction = JSON.parse(responseText);
+    } catch (e) {
+      console.error('[Generate] Failed to parse response:', responseText.substring(0, 500));
+      return res.status(500).json({ error: 'Invalid API response', detail: responseText.substring(0, 200) });
+    }
+
     if (!createResponse.ok) {
-      const errorData = await createResponse.json();
-      console.error('[Generate] Create prediction failed:', errorData);
+      console.error('[Generate] API error:', prediction);
       return res.status(createResponse.status).json({
-        error: 'Failed to create AI prediction',
-        detail: errorData.detail || 'Unknown error'
+        error: 'API error',
+        detail: prediction.detail || prediction.error || JSON.stringify(prediction)
       });
     }
 
-    const prediction = await createResponse.json();
-    console.log(`[Generate] Prediction created: ${prediction.id}`);
-
-    // Poll for result
-    const result = await pollPrediction(prediction.id);
-
-    if (result.status === 'succeeded') {
-      console.log(`[Generate] Success! Output ready.`);
-      const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
-      res.json({
-        success: true,
-        outputUrl: outputUrl,
-        predictionId: result.id,
-        metrics: result.metrics
-      });
-    } else {
-      console.error(`[Generate] Prediction failed:`, result.error);
-      res.status(500).json({
-        error: 'AI generation failed',
-        detail: result.error || 'Unknown error'
-      });
+    // If using Prefer: wait, the response might already be complete
+    if (prediction.status === 'succeeded' && prediction.output) {
+      const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+      console.log(`[Generate] Instant success!`);
+      return res.json({ success: true, outputUrl });
     }
+
+    // Otherwise poll for result
+    if (prediction.id) {
+      console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
+      const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
+
+      if (result.status === 'succeeded') {
+        const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+        console.log(`[Generate] Success!`);
+        return res.json({ success: true, outputUrl });
+      } else {
+        console.error(`[Generate] Failed:`, result.error);
+        return res.status(500).json({ error: 'Generation failed', detail: result.error || 'Unknown error' });
+      }
+    }
+
+    // Fallback
+    return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
 
   } catch (error) {
     console.error('[Generate] Server error:', error.message);
@@ -113,24 +123,23 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 });
 
 // Poll prediction status
-async function pollPrediction(predictionId) {
-  const maxAttempts = 60; // 3 minutes max
+async function pollPrediction(url) {
+  const maxAttempts = 60;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
-    const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+    const response = await fetch(url, {
       headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
     });
-
     const prediction = await response.json();
-    console.log(`[Poll] ${prediction.id} - Status: ${prediction.status} (${attempts * 3}s elapsed)`);
+    console.log(`[Poll] Status: ${prediction.status} (${attempts * 3}s)`);
 
-    if (prediction.status === 'succeeded' || prediction.status === 'failed' || prediction.status === 'canceled') {
+    if (['succeeded', 'failed', 'canceled'].includes(prediction.status)) {
       return prediction;
     }
 
     attempts++;
-    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
   throw new Error('Prediction timed out after 3 minutes');
@@ -143,34 +152,31 @@ function buildHairPrompt(style, density, hairline) {
     medium: 'moderate natural hair density, full coverage',
     high: 'thick dense full head of hair, maximum coverage'
   };
-
   const styleMap = {
     natural: 'naturally distributed hair follicles, organic hair growth pattern',
     dense: 'dense uniform hair coverage, thick hair',
     subtle: 'subtle improvement, slightly thicker hair, minimal change'
   };
-
   const hairlineMap = {
     'age-appropriate': 'age-appropriate natural mature hairline',
     'youthful': 'youthful lower hairline, full frontal coverage',
     'mature': 'mature dignified hairline, natural recession maintained'
   };
 
-  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED AND IDENTICAL`;
+  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED`;
 }
 
-// Build negative prompt
 function buildNegativePrompt() {
   return 'cartoon, anime, illustration, painting, drawing, art, sketch, CGI, 3D render, changed face, different person, altered facial features, different skin color, modified eyes, changed nose, different mouth, wig, fake hair, plastic, distorted, deformed, blurry, low quality, watermark, text, logo, different clothing, different background, different angle, different lighting';
 }
 
-// Catch-all: serve frontend
+// Serve frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing - set REPLICATE_API_TOKEN'}`);
+  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
