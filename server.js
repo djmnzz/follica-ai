@@ -28,7 +28,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '9.0 - Full Hairline Realism'
+    version: '10.0 - Beckham Style & Face Lock'
   });
 });
 
@@ -50,7 +50,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const prompt = buildHairPrompt(style, density, hairline);
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting Realism PRO - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+    console.log(`[Generate] Starting PRO Realistic Vision - Style: ${style}`);
 
     const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
@@ -60,15 +60,17 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
-        version: "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
+        // CAMBIO DE MODELO: Usamos Realistic Vision V5.1 (mejor para mantener caras)
+        version: "9936c2001faa2194a261c01381f90e65261879985476014a0a37a334593a05eb",
         input: {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          // Aumentado a 0.55 para permitir cambios más notables en el cabello
-          prompt_strength: 0.55,
-          num_inference_steps: 35,
-          guidance_scale: 8,
+          // 0.35 es el balance perfecto: suficiente para poner pelo Beckham, pero bajo para no tocar la cara.
+          prompt_strength: 0.35,
+          num_inference_steps: 40,
+          guidance_scale: 7,
+          scheduler: "K_EULER_ANCESTRAL",
           disable_safety_checker: true
         }
       })
@@ -143,30 +145,27 @@ async function pollPrediction(url) {
   throw new Error('Prediction timed out after 3 minutes');
 }
 
-// PROMPTS REESCRITOS PARA REALISMO Y SIN ENTRADAS
+// PROMPTS PROFESIONALES ESTILO BECKHAM
 function buildHairPrompt(style, density, hairline) {
+  // Mapeos simplificados, el peso lo lleva la referencia a Beckham
   const densityMap = {
-    low: 'natural looking full hair, moderate density',
-    medium: 'full head of abundant hair, medium-high density',
-    high: 'very thick, dense, full head of hair'
+    low: 'full density',
+    medium: 'high density',
+    high: 'maximum density'
   };
   const styleMap = {
-    natural: 'naturally styled with volume',
-    dense: 'thick, robustly styled hair',
-    subtle: 'neatly groomed full hair'
-  };
-  const hairlineMap = {
-    // Todas las opciones ahora fuerzan una línea de cabello completa sin entradas
-    'age-appropriate': 'a straight, full, youthful hairline with no recession',
-    'youthful': 'a perfectly straight, low, youthful hairline',
-    'mature': 'a full, strong hairline with absolutely no receding spots'
+    natural: 'textured and styled naturally',
+    dense: 'thick and robustly styled',
+    subtle: 'neatly groomed'
   };
 
-  return `Professional portrait photograph of the man. He now has a complete and full head of hair with ${densityMap[density]} and a ${hairlineMap[hairline]}, styled in a ${styleMap[style]}. The new hair looks completely realistic, healthy, and covers all previously bald or receding areas. The man's face, expression, skin, clothing, and background remain identical to the original photo. High resolution, detailed textures.`;
+  // Prompt directo y específico
+  return `Based on image_0.png, the man now has a full head of thick, healthy hair styled like David Beckham. All receding areas and bald spots are completely filled in with a perfect, sharp, youthful hairline. The hair has realistic texture and volume. Crucially, the man's face, facial structure, skin, eyes, expression, clothing, and the background are absolutely identical to image_0.png. Only the hair changed. Photorealistic, 8k.`;
 }
 
 function buildNegativePrompt() {
-  return 'nsfw, nude, bald, thinning hair, receding hairline, forehead exposure, collage, split screen, text, watermark, different person, changed face, distorted features, low quality, blurry, wig, fake looking hair';
+  // Prohibimos explícitamente cambiar la cara
+  return 'changed face, different person, altered facial features, plastic surgery look, distorted face, blurry eyes, receding hairline, bald spots, thinning hair, low quality, ugly, deformed, watermark, text';
 }
 
 // Serve frontend
