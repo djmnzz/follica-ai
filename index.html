@@ -1,0 +1,1602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Follica AI — Hair Transplant Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0c0b;
+      --surface: #131716;
+      --surface-2: #1a1f1d;
+      --surface-3: #222926;
+      --border: #2a3330;
+      --border-light: #354540;
+      --text: #e8ede9;
+      --text-muted: #8a9690;
+      --text-dim: #5c6b63;
+      --accent: #4ae68a;
+      --accent-dim: #2a8a52;
+      --accent-glow: rgba(74, 230, 138, 0.15);
+      --warm: #e6a44a;
+      --warm-dim: rgba(230, 164, 74, 0.15);
+      --danger: #e6574a;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --radius-lg: 20px;
+      --font: 'DM Sans', -apple-system, sans-serif;
+      --font-serif: 'Instrument Serif', Georgia, serif;
+      --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    html { font-size: 16px; scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ─── Noise texture overlay ─── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ─── Scrollbar ─── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ─── Utilities ─── */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+    button {
+      font-family: var(--font);
+      cursor: pointer;
+      border: none;
+      outline: none;
+      transition: all var(--transition);
+    }
+
+    input {
+      font-family: var(--font);
+      outline: none;
+      border: none;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* ─── Animations ─── */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-in { animation: fadeIn 0.5s ease both; }
+    .fade-in-delay-1 { animation: fadeIn 0.5s ease 0.1s both; }
+    .fade-in-delay-2 { animation: fadeIn 0.5s ease 0.2s both; }
+    .fade-in-delay-3 { animation: fadeIn 0.5s ease 0.3s both; }
+
+    /* ─── NAV ─── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 12, 11, 0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 1.125rem;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.875rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .nav-link {
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: transparent;
+    }
+
+    .nav-link:hover, .nav-link.active { color: var(--text); background: var(--surface-2); }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .credits-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent-dim);
+      border-radius: 100px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .credits-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .btn-primary {
+      padding: 8px 20px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .btn-primary:hover { background: #5eff9e; transform: translateY(-1px); }
+
+    .btn-secondary {
+      padding: 8px 20px;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .btn-secondary:hover { background: var(--surface-3); border-color: var(--border-light); }
+
+    .btn-ghost {
+      padding: 8px 12px;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      font-size: 0.875rem;
+    }
+
+    .btn-ghost:hover { color: var(--text); background: var(--surface-2); }
+
+    .avatar-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.8125rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .avatar-btn:hover { border-color: var(--accent-dim); }
+
+    /* ─── MODAL ─── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      width: 100%;
+      max-width: 420px;
+      animation: slideDown 0.3s ease;
+    }
+
+    .modal h2 {
+      font-family: var(--font-serif);
+      font-size: 1.75rem;
+      font-weight: 400;
+      margin-bottom: 8px;
+    }
+
+    .modal p {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-bottom: 28px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 12px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 0.9375rem;
+      transition: border-color var(--transition);
+    }
+
+    .form-group input:focus { border-color: var(--accent-dim); }
+    .form-group input::placeholder { color: var(--text-dim); }
+
+    .modal .btn-primary {
+      width: 100%;
+      padding: 14px;
+      font-size: 0.9375rem;
+      margin-top: 8px;
+    }
+
+    .modal-switch {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+    }
+
+    .modal-switch span {
+      color: var(--accent);
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .modal-switch span:hover { text-decoration: underline; }
+
+    .form-error {
+      color: var(--danger);
+      font-size: 0.8125rem;
+      margin-top: 8px;
+    }
+
+    /* ─── HERO ─── */
+    .hero {
+      padding: 100px 0 80px;
+      text-align: center;
+      position: relative;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -100px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      margin-bottom: 32px;
+    }
+
+    .hero-badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 2s infinite;
+    }
+
+    .hero h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 400;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      margin-bottom: 24px;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+
+    .hero-sub {
+      font-size: 1.125rem;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 40px;
+      line-height: 1.6;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .hero-actions .btn-primary {
+      padding: 14px 32px;
+      font-size: 1rem;
+    }
+
+    .hero-actions .btn-secondary {
+      padding: 14px 32px;
+      font-size: 1rem;
+    }
+
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      margin-top: 64px;
+      padding-top: 48px;
+      border-top: 1px solid var(--border);
+    }
+
+    .hero-stat {
+      text-align: center;
+    }
+
+    .hero-stat-value {
+      font-family: var(--font-serif);
+      font-size: 2rem;
+      font-weight: 400;
+      color: var(--accent);
+    }
+
+    .hero-stat-label {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* ─── FEATURES ─── */
+    .features {
+      padding: 80px 0;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-family: var(--font-serif);
+      font-size: 2.25rem;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      margin-bottom: 48px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .feature-card {
+      padding: 32px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      transition: all var(--transition);
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-light);
+      transform: translateY(-2px);
+    }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-sm);
+      background: var(--accent-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      font-size: 1.25rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* ─── GENERATE PAGE ─── */
+    .page { padding: 48px 0 80px; }
+
+    .page-header {
+      margin-bottom: 40px;
+    }
+
+    .page-header h1 {
+      font-family: var(--font-serif);
+      font-size: 2rem;
+      font-weight: 400;
+      margin-bottom: 8px;
+    }
+
+    .page-header p {
+      color: var(--text-muted);
+      font-size: 0.9375rem;
+    }
+
+    .generate-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .generate-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+    }
+
+    .generate-card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 20px;
+    }
+
+    /* Upload area */
+    .upload-area {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all var(--transition);
+      position: relative;
+      min-height: 300px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .upload-area:hover { border-color: var(--accent-dim); background: var(--accent-glow); }
+    .upload-area.has-image { padding: 0; border-style: solid; }
+
+    .upload-area img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: var(--radius);
+      max-height: 400px;
+    }
+
+    .upload-icon {
+      font-size: 2rem;
+      margin-bottom: 12px;
+      opacity: 0.6;
+    }
+
+    .upload-text {
+      font-size: 0.9375rem;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .upload-hint {
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+    }
+
+    .remove-image-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 32px;
+      height: 32px;
+      background: rgba(0,0,0,0.7);
+      border-radius: 50%;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      z-index: 2;
+    }
+
+    /* Options */
+    .option-group {
+      margin-bottom: 20px;
+    }
+
+    .option-group label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .option-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .option-btn {
+      flex: 1;
+      padding: 10px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      text-align: center;
+    }
+
+    .option-btn.selected {
+      background: var(--accent-glow);
+      border-color: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .option-btn:hover:not(.selected) { border-color: var(--border-light); color: var(--text); }
+
+    .generate-btn {
+      width: 100%;
+      padding: 16px;
+      margin-top: 24px;
+      font-size: 1rem;
+      font-weight: 600;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: var(--radius);
+      letter-spacing: -0.01em;
+    }
+
+    .generate-btn:hover:not(:disabled) { background: #5eff9e; transform: translateY(-1px); }
+    .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Result area */
+    .result-area {
+      min-height: 300px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .result-area.has-result { border-style: solid; padding: 0; }
+
+    .result-area img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: var(--radius);
+      max-height: 400px;
+    }
+
+    .result-placeholder {
+      text-align: center;
+      color: var(--text-dim);
+    }
+
+    .result-placeholder-icon { font-size: 2rem; margin-bottom: 12px; opacity: 0.4; }
+    .result-placeholder p { font-size: 0.875rem; }
+
+    /* Loading spinner */
+    .loading-container {
+      text-align: center;
+    }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    .loading-text {
+      font-size: 0.9375rem;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .loading-time {
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    /* ─── HISTORY ─── */
+    .history-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .history-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all var(--transition);
+    }
+
+    .history-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+
+    .history-images {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+    }
+
+    .history-img-wrap {
+      position: relative;
+      aspect-ratio: 1;
+      overflow: hidden;
+      background: var(--surface-2);
+    }
+
+    .history-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .history-img-label {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      padding: 2px 10px;
+      background: rgba(0,0,0,0.7);
+      border-radius: 100px;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .history-meta {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .history-date {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+    }
+
+    .history-empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 80px 24px;
+      color: var(--text-dim);
+    }
+
+    .history-empty-icon { font-size: 2.5rem; margin-bottom: 12px; opacity: 0.3; }
+    .history-empty p { font-size: 0.9375rem; }
+
+    /* ─── PRICING ─── */
+    .pricing { padding: 80px 0; }
+
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 48px;
+    }
+
+    .price-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 36px;
+      position: relative;
+      transition: all var(--transition);
+    }
+
+    .price-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+
+    .price-card.popular {
+      border-color: var(--accent-dim);
+      background: linear-gradient(to bottom, var(--accent-glow), var(--surface));
+    }
+
+    .price-card-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 16px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 100px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .price-card-name {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .price-card-desc {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    .price-card-amount {
+      font-family: var(--font-serif);
+      font-size: 3rem;
+      font-weight: 400;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .price-card-credits {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-bottom: 28px;
+    }
+
+    .price-card ul {
+      list-style: none;
+      margin-bottom: 28px;
+    }
+
+    .price-card li {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .price-card li:last-child { border-bottom: none; }
+
+    .check-icon { color: var(--accent); font-size: 0.875rem; }
+
+    .price-card .btn-primary, .price-card .btn-secondary { width: 100%; padding: 14px; }
+
+    /* ─── NOTIFICATION ─── */
+    .notification {
+      position: fixed;
+      top: 80px;
+      right: 24px;
+      z-index: 300;
+      padding: 14px 20px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      animation: slideDown 0.3s ease;
+      max-width: 360px;
+    }
+
+    .notification.success { border-color: var(--accent-dim); color: var(--accent); }
+    .notification.error { border-color: var(--danger); color: var(--danger); }
+
+    /* ─── FOOTER ─── */
+    footer {
+      padding: 48px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    footer p {
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+    }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 768px) {
+      .features-grid, .pricing-grid { grid-template-columns: 1fr; }
+      .generate-layout { grid-template-columns: 1fr; }
+      .history-grid { grid-template-columns: 1fr; }
+      .hero-stats { gap: 24px; flex-wrap: wrap; }
+      .nav-links { display: none; }
+      .hero h1 { font-size: 2.25rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    // ─── STATE ───
+    const state = {
+      page: 'home',
+      user: null,
+      showAuth: false,
+      authMode: 'signup',
+      authError: '',
+      uploadedImage: null,
+      uploadedFile: null,
+      generatedResult: null,
+      isGenerating: false,
+      generatingTime: 0,
+      generatingInterval: null,
+      style: 'natural',
+      density: 'medium',
+      hairline: 'age-appropriate',
+      history: [],
+      notification: null,
+      backendConnected: false
+    };
+
+    // Load user from localStorage
+    const savedUser = localStorage.getItem('follica_user');
+    if (savedUser) {
+      state.user = JSON.parse(savedUser);
+      state.history = JSON.parse(localStorage.getItem(`follica_history_${state.user.email}`) || '[]');
+    }
+
+    // Check backend
+    async function checkBackend() {
+      try {
+        const r = await fetch('/api/health');
+        const data = await r.json();
+        state.backendConnected = data.status === 'ok' && data.hasApiKey;
+        console.log('Backend:', state.backendConnected ? '✅ Connected with API key' : '⚠️ No API key');
+      } catch (e) {
+        state.backendConnected = false;
+        console.log('Backend: ❌ Not reachable');
+      }
+    }
+    checkBackend();
+
+    // ─── RENDER ENGINE ───
+    function render() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        ${renderNav()}
+        ${state.showAuth ? renderAuthModal() : ''}
+        ${state.notification ? renderNotification() : ''}
+        ${renderPage()}
+        ${renderFooter()}
+      `;
+      bindEvents();
+    }
+
+    function renderNav() {
+      return `
+        <nav>
+          <div class="container nav-inner">
+            <a href="#" class="nav-logo" onclick="navigate('home')">
+              <div class="nav-logo-icon">✦</div>
+              Follica
+            </a>
+            <div class="nav-links">
+              <button class="nav-link ${state.page === 'home' ? 'active' : ''}" onclick="navigate('home')">Home</button>
+              ${state.user ? `
+                <button class="nav-link ${state.page === 'generate' ? 'active' : ''}" onclick="navigate('generate')">Generate</button>
+                <button class="nav-link ${state.page === 'history' ? 'active' : ''}" onclick="navigate('history')">History</button>
+              ` : ''}
+              <button class="nav-link ${state.page === 'pricing' ? 'active' : ''}" onclick="navigate('pricing')">Pricing</button>
+            </div>
+            <div class="nav-right">
+              ${state.user ? `
+                <div class="credits-badge">
+                  <div class="credits-dot"></div>
+                  ${state.user.credits} credits
+                </div>
+                <button class="avatar-btn" onclick="logout()" title="Logout">
+                  ${state.user.name ? state.user.name[0].toUpperCase() : state.user.email[0].toUpperCase()}
+                </button>
+              ` : `
+                <button class="btn-secondary" onclick="showAuth('login')">Sign in</button>
+                <button class="btn-primary" onclick="showAuth('signup')">Get Started</button>
+              `}
+            </div>
+          </div>
+        </nav>
+      `;
+    }
+
+    function renderPage() {
+      switch(state.page) {
+        case 'home': return renderHome();
+        case 'generate': return state.user ? renderGenerate() : renderHome();
+        case 'history': return state.user ? renderHistory() : renderHome();
+        case 'pricing': return renderPricing();
+        default: return renderHome();
+      }
+    }
+
+    function renderHome() {
+      return `
+        <section class="hero">
+          <div class="container">
+            <div class="hero-badge fade-in">
+              <div class="hero-badge-dot"></div>
+              AI-Powered Hair Visualization
+            </div>
+            <h1 class="fade-in-delay-1">See your <em>hair transplant</em> results before surgery</h1>
+            <p class="hero-sub fade-in-delay-2">Upload a photo and let our AI show you realistic before &amp; after results. Built for clinics and patients who want to visualize outcomes with confidence.</p>
+            <div class="hero-actions fade-in-delay-3">
+              <button class="btn-primary" onclick="${state.user ? "navigate('generate')" : "showAuth('signup')"}">
+                ${state.user ? 'Start Generating' : 'Get Started Free'}
+              </button>
+              <button class="btn-secondary" onclick="navigate('pricing')">View Pricing</button>
+            </div>
+            <div class="hero-stats fade-in-delay-3">
+              <div class="hero-stat">
+                <div class="hero-stat-value">47M+</div>
+                <div class="hero-stat-label">Men with pattern baldness in the US</div>
+              </div>
+              <div class="hero-stat">
+                <div class="hero-stat-value">94%</div>
+                <div class="hero-stat-label">Patient satisfaction with previews</div>
+              </div>
+              <div class="hero-stat">
+                <div class="hero-stat-value">&lt;60s</div>
+                <div class="hero-stat-label">Average generation time</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="features">
+          <div class="container">
+            <div class="section-label">Features</div>
+            <h2 class="section-title">Everything you need for<br>hair transplant visualization</h2>
+            <div class="features-grid">
+              ${[
+                { icon: '🧠', title: 'AI-Powered Generation', desc: 'Stable Diffusion XL creates photorealistic hair transplant results that match your natural hair.' },
+                { icon: '🎯', title: 'Hair-Only Editing', desc: 'Our AI modifies only hair and scalp areas — face, skin, and features remain completely unchanged.' },
+                { icon: '⚡', title: 'Fast Results', desc: 'Get your visualization in under 60 seconds. No waiting, no appointments needed.' },
+                { icon: '🎨', title: 'Customizable Options', desc: 'Choose hair style, density level, and hairline type to match your desired outcome.' },
+                { icon: '📥', title: 'Download & Share', desc: 'Download professional before/after comparisons to share with your clinic or surgeon.' },
+                { icon: '🔒', title: 'Privacy First', desc: 'Your photos are processed and never stored on our servers. Complete privacy guaranteed.' }
+              ].map(f => `
+                <div class="feature-card">
+                  <div class="feature-icon">${f.icon}</div>
+                  <h3>${f.title}</h3>
+                  <p>${f.desc}</p>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderGenerate() {
+      return `
+        <section class="page">
+          <div class="container">
+            <div class="page-header">
+              <h1>Generate Result</h1>
+              <p>Upload a photo to visualize your hair transplant outcome${!state.backendConnected ? ' <span style="color:var(--warm);">(Demo mode — backend not connected)</span>' : ''}</p>
+            </div>
+            <div class="generate-layout">
+              <div class="generate-card">
+                <h3>📷 Before — Upload Photo</h3>
+                <div class="upload-area ${state.uploadedImage ? 'has-image' : ''}" onclick="triggerUpload()">
+                  ${state.uploadedImage ? `
+                    <img src="${state.uploadedImage}" alt="Uploaded">
+                    <button class="remove-image-btn" onclick="event.stopPropagation(); removeImage()">✕</button>
+                  ` : `
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">Click to upload a photo</div>
+                    <div class="upload-hint">JPG, PNG — max 10MB</div>
+                  `}
+                </div>
+                <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleUpload(event)">
+
+                <div class="option-group" style="margin-top:24px">
+                  <label>Hair Style</label>
+                  <div class="option-buttons">
+                    ${['natural', 'dense', 'subtle'].map(s => `
+                      <button class="option-btn ${state.style === s ? 'selected' : ''}" onclick="state.style='${s}'; render();">${s.charAt(0).toUpperCase() + s.slice(1)}</button>
+                    `).join('')}
+                  </div>
+                </div>
+
+                <div class="option-group">
+                  <label>Density</label>
+                  <div class="option-buttons">
+                    ${['low', 'medium', 'high'].map(d => `
+                      <button class="option-btn ${state.density === d ? 'selected' : ''}" onclick="state.density='${d}'; render();">${d.charAt(0).toUpperCase() + d.slice(1)}</button>
+                    `).join('')}
+                  </div>
+                </div>
+
+                <div class="option-group">
+                  <label>Hairline</label>
+                  <div class="option-buttons">
+                    ${['age-appropriate', 'youthful', 'mature'].map(h => `
+                      <button class="option-btn ${state.hairline === h ? 'selected' : ''}" onclick="state.hairline='${h}'; render();">${h.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</button>
+                    `).join('')}
+                  </div>
+                </div>
+
+                <button class="generate-btn" onclick="generate()" ${!state.uploadedImage || state.isGenerating || state.user.credits < 1 ? 'disabled' : ''}>
+                  ${state.isGenerating ? 'Generating...' : `Generate AI Result (1 Credit)`}
+                </button>
+              </div>
+
+              <div class="generate-card">
+                <h3>✨ After — AI Result</h3>
+                <div class="result-area ${state.generatedResult ? 'has-result' : ''}">
+                  ${state.isGenerating ? `
+                    <div class="loading-container">
+                      <div class="spinner"></div>
+                      <div class="loading-text">AI is generating your result...</div>
+                      <div class="loading-time">${state.generatingTime}s elapsed</div>
+                    </div>
+                  ` : state.generatedResult ? `
+                    <img src="${state.generatedResult}" alt="AI Result">
+                  ` : `
+                    <div class="result-placeholder">
+                      <div class="result-placeholder-icon">✨</div>
+                      <p>Your AI result will appear here</p>
+                    </div>
+                  `}
+                </div>
+                ${state.generatedResult && !state.isGenerating ? `
+                  <div class="result-actions">
+                    <button class="btn-primary" onclick="downloadResult()" style="flex:1">📥 Download Result</button>
+                    <button class="btn-secondary" onclick="downloadComparison()" style="flex:1">📊 Download Comparison</button>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderHistory() {
+      return `
+        <section class="page">
+          <div class="container">
+            <div class="page-header">
+              <h1>Generation History</h1>
+              <p>${state.history.length} generation${state.history.length !== 1 ? 's' : ''}</p>
+            </div>
+            <div class="history-grid">
+              ${state.history.length === 0 ? `
+                <div class="history-empty">
+                  <div class="history-empty-icon">📋</div>
+                  <p>No generations yet. Start by uploading a photo!</p>
+                  <button class="btn-primary" style="margin-top:20px" onclick="navigate('generate')">Generate Now</button>
+                </div>
+              ` : state.history.map((item, i) => `
+                <div class="history-card">
+                  <div class="history-images">
+                    <div class="history-img-wrap">
+                      <img src="${item.before}" alt="Before">
+                      <span class="history-img-label">Before</span>
+                    </div>
+                    <div class="history-img-wrap">
+                      <img src="${item.after}" alt="After">
+                      <span class="history-img-label" style="color:var(--accent)">After</span>
+                    </div>
+                  </div>
+                  <div class="history-meta">
+                    <span class="history-date">${item.date}</span>
+                    <button class="btn-ghost" onclick="downloadHistoryItem(${i})">📥 Download</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderPricing() {
+      const plans = [
+        { name: 'Starter', desc: 'For individual use', price: '$29', credits: '50 credits', features: ['50 AI generations', 'Standard quality', 'Before/after downloads', 'Email support'], popular: false },
+        { name: 'Professional', desc: 'For clinics & surgeons', price: '$99', credits: '200 credits', features: ['200 AI generations', 'Highest quality output', 'Priority processing', 'Custom branding', 'Dedicated support'], popular: true },
+        { name: 'Enterprise', desc: 'For large practices', price: '$299', credits: '1,000 credits', features: ['1,000 AI generations', 'API access', 'White-label solution', 'Team accounts', 'SLA guarantee'], popular: false }
+      ];
+
+      return `
+        <section class="pricing">
+          <div class="container">
+            <div style="text-align:center">
+              <div class="section-label">Pricing</div>
+              <h2 class="section-title">Simple, credit-based pricing</h2>
+            </div>
+            <div class="pricing-grid">
+              ${plans.map(p => `
+                <div class="price-card ${p.popular ? 'popular' : ''}">
+                  ${p.popular ? '<div class="price-card-badge">Most Popular</div>' : ''}
+                  <div class="price-card-name">${p.name}</div>
+                  <div class="price-card-desc">${p.desc}</div>
+                  <div class="price-card-amount">${p.price}</div>
+                  <div class="price-card-credits">${p.credits}</div>
+                  <ul>
+                    ${p.features.map(f => `<li><span class="check-icon">✓</span> ${f}</li>`).join('')}
+                  </ul>
+                  <button class="${p.popular ? 'btn-primary' : 'btn-secondary'}" onclick="${state.user ? "notify('Coming soon! Payment integration in progress.', 'success')" : "showAuth('signup')"}">
+                    ${state.user ? 'Buy Credits' : 'Get Started'}
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderAuthModal() {
+      const isLogin = state.authMode === 'login';
+      return `
+        <div class="modal-overlay" onclick="closeAuth(event)">
+          <div class="modal" onclick="event.stopPropagation()">
+            <h2>${isLogin ? 'Welcome back' : 'Get started'}</h2>
+            <p>${isLogin ? 'Sign in to your Follica account' : 'Create an account — 10 free credits included'}</p>
+            ${state.authError ? `<div class="form-error">${state.authError}</div>` : ''}
+            ${!isLogin ? `
+              <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="authName" placeholder="Dr. John Smith">
+              </div>
+            ` : ''}
+            <div class="form-group">
+              <label>Email</label>
+              <input type="email" id="authEmail" placeholder="you@clinic.com">
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input type="password" id="authPassword" placeholder="••••••••">
+            </div>
+            <button class="btn-primary" onclick="handleAuth()">
+              ${isLogin ? 'Sign In' : 'Create Account'}
+            </button>
+            <div class="modal-switch">
+              ${isLogin
+                ? 'Don\'t have an account? <span onclick="toggleAuthMode()">Sign up</span>'
+                : 'Already have an account? <span onclick="toggleAuthMode()">Sign in</span>'
+              }
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNotification() {
+      return `<div class="notification ${state.notification.type}">${state.notification.message}</div>`;
+    }
+
+    function renderFooter() {
+      return `
+        <footer>
+          <div class="container">
+            <p>© 2025 Follica AI — Hair transplant visualization powered by AI</p>
+          </div>
+        </footer>
+      `;
+    }
+
+    // ─── ACTIONS ───
+    function navigate(page) {
+      state.page = page;
+      state.generatedResult = null;
+      state.isGenerating = false;
+      if (state.generatingInterval) clearInterval(state.generatingInterval);
+      render();
+      window.scrollTo(0, 0);
+    }
+
+    function showAuth(mode) {
+      state.showAuth = true;
+      state.authMode = mode;
+      state.authError = '';
+      render();
+    }
+
+    function closeAuth(e) {
+      if (e.target === e.currentTarget) {
+        state.showAuth = false;
+        render();
+      }
+    }
+
+    function toggleAuthMode() {
+      state.authMode = state.authMode === 'login' ? 'signup' : 'login';
+      state.authError = '';
+      render();
+    }
+
+    function handleAuth() {
+      const email = document.getElementById('authEmail')?.value?.trim();
+      const password = document.getElementById('authPassword')?.value;
+      const name = document.getElementById('authName')?.value?.trim();
+
+      if (!email || !password) {
+        state.authError = 'Please fill in all required fields.';
+        render();
+        return;
+      }
+
+      const allUsers = JSON.parse(localStorage.getItem('follica_all_users') || '{}');
+
+      if (state.authMode === 'signup') {
+        if (allUsers[email]) {
+          state.authError = 'Account already exists. Try signing in.';
+          render();
+          return;
+        }
+        const user = { email, name: name || email.split('@')[0], password, credits: 10, createdAt: new Date().toISOString() };
+        allUsers[email] = user;
+        localStorage.setItem('follica_all_users', JSON.stringify(allUsers));
+        state.user = user;
+        localStorage.setItem('follica_user', JSON.stringify(user));
+        state.history = [];
+        state.showAuth = false;
+        notify('Account created! You have 10 free credits.', 'success');
+      } else {
+        const user = allUsers[email];
+        if (!user || user.password !== password) {
+          state.authError = 'Invalid email or password.';
+          render();
+          return;
+        }
+        state.user = user;
+        localStorage.setItem('follica_user', JSON.stringify(user));
+        state.history = JSON.parse(localStorage.getItem(`follica_history_${email}`) || '[]');
+        state.showAuth = false;
+        notify(`Welcome back, ${user.name}!`, 'success');
+      }
+      render();
+    }
+
+    function logout() {
+      state.user = null;
+      state.history = [];
+      state.page = 'home';
+      localStorage.removeItem('follica_user');
+      render();
+    }
+
+    function triggerUpload() {
+      document.getElementById('fileInput').click();
+    }
+
+    function handleUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) {
+        notify('File too large. Max 10MB.', 'error');
+        return;
+      }
+      state.uploadedFile = file;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        state.uploadedImage = e.target.result;
+        state.generatedResult = null;
+        render();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function removeImage() {
+      state.uploadedImage = null;
+      state.uploadedFile = null;
+      state.generatedResult = null;
+      render();
+    }
+
+    async function generate() {
+      if (!state.uploadedFile || !state.user || state.user.credits < 1) return;
+
+      state.isGenerating = true;
+      state.generatedResult = null;
+      state.generatingTime = 0;
+      render();
+
+      state.generatingInterval = setInterval(() => {
+        state.generatingTime++;
+        const timeEl = document.querySelector('.loading-time');
+        if (timeEl) timeEl.textContent = `${state.generatingTime}s elapsed`;
+      }, 1000);
+
+      try {
+        if (state.backendConnected) {
+          // ── REAL AI GENERATION ──
+          const formData = new FormData();
+          formData.append('image', state.uploadedFile);
+          formData.append('style', state.style);
+          formData.append('density', state.density);
+          formData.append('hairline', state.hairline);
+
+          const response = await fetch('/api/generate', {
+            method: 'POST',
+            body: formData
+          });
+
+          const data = await response.json();
+
+          if (data.success && data.outputUrl) {
+            state.generatedResult = data.outputUrl;
+            useCredit();
+            saveToHistory();
+            notify('AI generation complete!', 'success');
+          } else {
+            throw new Error(data.error || data.detail || 'Generation failed');
+          }
+        } else {
+          // ── DEMO MODE ──
+          await new Promise(r => setTimeout(r, 2500));
+          state.generatedResult = await createDemoResult(state.uploadedImage);
+          useCredit();
+          saveToHistory();
+          notify('Demo result generated. Connect backend for real AI.', 'success');
+        }
+      } catch (error) {
+        console.error('Generation error:', error);
+        notify(`Error: ${error.message}`, 'error');
+      } finally {
+        state.isGenerating = false;
+        clearInterval(state.generatingInterval);
+        render();
+      }
+    }
+
+    function useCredit() {
+      state.user.credits--;
+      localStorage.setItem('follica_user', JSON.stringify(state.user));
+      const allUsers = JSON.parse(localStorage.getItem('follica_all_users') || '{}');
+      allUsers[state.user.email] = state.user;
+      localStorage.setItem('follica_all_users', JSON.stringify(allUsers));
+    }
+
+    function saveToHistory() {
+      const item = {
+        before: state.uploadedImage,
+        after: state.generatedResult,
+        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        style: state.style,
+        density: state.density,
+        hairline: state.hairline
+      };
+      state.history.unshift(item);
+      localStorage.setItem(`follica_history_${state.user.email}`, JSON.stringify(state.history));
+    }
+
+    // Demo result (simple overlay — not real AI)
+    function createDemoResult(imageSrc) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          // Simple darkening overlay on top 40% to simulate more hair
+          const grad = ctx.createLinearGradient(0, 0, 0, img.height * 0.5);
+          grad.addColorStop(0, 'rgba(30, 20, 10, 0.35)');
+          grad.addColorStop(0.7, 'rgba(30, 20, 10, 0.15)');
+          grad.addColorStop(1, 'rgba(30, 20, 10, 0)');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, img.width, img.height * 0.5);
+
+          // "DEMO" watermark
+          ctx.save();
+          ctx.globalAlpha = 0.6;
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${Math.max(14, img.width * 0.025)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText('DEMO — Not Real AI', img.width / 2, img.height - 20);
+          ctx.restore();
+
+          resolve(canvas.toDataURL('image/jpeg', 0.9));
+        };
+        img.src = imageSrc;
+      });
+    }
+
+    function downloadResult() {
+      if (!state.generatedResult) return;
+      const a = document.createElement('a');
+      a.href = state.generatedResult;
+      a.download = `follica-result-${Date.now()}.jpg`;
+      a.click();
+    }
+
+    function downloadComparison() {
+      if (!state.generatedResult || !state.uploadedImage) return;
+
+      const beforeImg = new Image();
+      const afterImg = new Image();
+      let loaded = 0;
+
+      function onLoad() {
+        loaded++;
+        if (loaded < 2) return;
+
+        const w = Math.max(beforeImg.width, afterImg.width);
+        const h = Math.max(beforeImg.height, afterImg.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = w * 2 + 40;
+        canvas.height = h + 80;
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#0a0c0b';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#4ae68a';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Follica AI — Before & After', canvas.width / 2, 36);
+
+        ctx.drawImage(beforeImg, 10, 60, w, h);
+        ctx.drawImage(afterImg, w + 30, 60, w, h);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('BEFORE', w / 2 + 10, h + 76);
+        ctx.fillText('AFTER', w + 30 + w / 2, h + 76);
+
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/jpeg', 0.9);
+        a.download = `follica-comparison-${Date.now()}.jpg`;
+        a.click();
+      }
+
+      beforeImg.crossOrigin = 'anonymous';
+      afterImg.crossOrigin = 'anonymous';
+      beforeImg.onload = onLoad;
+      afterImg.onload = onLoad;
+      beforeImg.src = state.uploadedImage;
+      afterImg.src = state.generatedResult;
+    }
+
+    function downloadHistoryItem(index) {
+      const item = state.history[index];
+      if (!item) return;
+      const a = document.createElement('a');
+      a.href = item.after;
+      a.download = `follica-result-${index}.jpg`;
+      a.click();
+    }
+
+    function notify(message, type = 'success') {
+      state.notification = { message, type };
+      render();
+      setTimeout(() => { state.notification = null; render(); }, 4000);
+    }
+
+    function bindEvents() {
+      // Enter key on auth modal
+      const passInput = document.getElementById('authPassword');
+      if (passInput) {
+        passInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') handleAuth();
+        });
+      }
+    }
+
+    // Initial render
+    render();
+  </script>
+</body>
+</html>
