@@ -29,20 +29,30 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-async function getAspectRatio(buffer) {
-  try {
-    const metadata = await sharp(buffer).metadata();
-    const ratio = metadata.width / metadata.height;
-    if (ratio > 1.6) return '16:9';
-    if (ratio > 1.3) return '3:2';
-    if (ratio > 1.1) return '4:3';
-    if (ratio > 0.9) return '1:1';
-    if (ratio > 0.7) return '3:4';
-    if (ratio > 0.55) return '2:3';
-    return '9:16';
-  } catch (e) {
-    return '1:1';
-  }
+// Normalize image: fix EXIF rotation and get aspect ratio
+async function normalizeImage(buffer, mimetype) {
+  // sharp.rotate() with no args auto-rotates based on EXIF orientation
+  const normalized = await sharp(buffer)
+    .rotate()
+    .jpeg({ quality: 92 })
+    .toBuffer();
+
+  const metadata = await sharp(normalized).metadata();
+  const ratio = metadata.width / metadata.height;
+
+  let aspectRatio;
+  if (ratio > 1.6) aspectRatio = '16:9';
+  else if (ratio > 1.3) aspectRatio = '3:2';
+  else if (ratio > 1.1) aspectRatio = '4:3';
+  else if (ratio > 0.9) aspectRatio = '1:1';
+  else if (ratio > 0.7) aspectRatio = '3:4';
+  else if (ratio > 0.55) aspectRatio = '2:3';
+  else aspectRatio = '9:16';
+
+  const base64 = `data:image/jpeg;base64,${normalized.toString('base64')}`;
+
+  console.log(`[Normalize] ${metadata.width}x${metadata.height} ratio=${ratio.toFixed(2)} → ${aspectRatio}`);
+  return { base64, aspectRatio };
 }
 
 const MODELS = [
@@ -59,14 +69,12 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'No image uploaded' });
     }
 
-    const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
     const density = req.body.density || 'medium';
-    const aspectRatio = await getAspectRatio(req.file.buffer);
 
-    // Ultra-minimal prompt. Flux Kontext preserves identity best when
-    // the prompt is SHORT and only describes the change.
+    // Normalize: fix EXIF rotation from mobile photos
+    const { base64, aspectRatio } = await normalizeImage(req.file.buffer, req.file.mimetype);
+
     const prompt = buildHairPrompt(density);
-
     console.log(`[Generate] Aspect: ${aspectRatio}, Density: ${density}`);
     console.log(`[Generate] Prompt: ${prompt}`);
 
@@ -74,7 +82,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       for (let attempt = 1; attempt <= 2; attempt++) {
         console.log(`[Generate] ${model} attempt ${attempt}...`);
         try {
-          const result = await runModel(model, base64Image, prompt, aspectRatio);
+          const result = await runModel(model, base64, prompt, aspectRatio);
           if (result.success) {
             console.log(`[Generate] ✅ Success with ${model}!`);
             return res.json({ success: true, outputUrl: result.outputUrl, model });
@@ -160,15 +168,13 @@ async function pollPrediction(url) {
 
 function buildHairPrompt(density) {
   const densityMap = {
-    low: 'a moderate amount of',
+    low: 'a natural amount of',
     medium: 'a full head of',
     high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
 
-  // ULTRA SHORT prompt. Flux Kontext works best with minimal instructions.
-  // Long prompts confuse it and cause it to change things we don't want changed.
-  return `Make this person have ${d} hair on top. Same hair color, same beard, same everything else.`;
+  return `Make this person have ${d} natural hair on top, laying flat and neat, not sticking up. Hair should look like a real short-to-medium men's hairstyle that lays down naturally. Same hair color, same beard, same everything else.`;
 }
 
 app.get('*', (req, res) => {
@@ -178,6 +184,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
   console.log(`🎯 Models: Flux Kontext Max > Flux Kontext Pro`);
+  console.log(`📸 EXIF rotation fix: enabled`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
