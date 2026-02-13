@@ -7,12 +7,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 
-// Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -22,17 +20,20 @@ const upload = multer({
   }
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
-    model: 'google/nano-banana-pro',
+    models: ['google/nano-banana-pro', 'google/nano-banana'],
     timestamp: new Date().toISOString()
   });
 });
 
-// Generate AI hair transplant result using Nano Banana Pro
+const MODELS = [
+  'google/nano-banana-pro',
+  'google/nano-banana'
+];
+
 app.post('/api/generate', upload.single('image'), async (req, res) => {
   try {
     if (!REPLICATE_API_TOKEN) {
@@ -46,75 +47,26 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const style = req.body.style || 'natural';
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
-
     const prompt = buildHairPrompt(style, density, hairline);
 
-    console.log(`[Generate] Starting with Nano Banana Pro - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
-    console.log(`[Generate] Prompt: ${prompt.substring(0, 100)}...`);
+    for (const model of MODELS) {
+      console.log(`[Generate] Trying ${model}...`);
 
-    // Call Nano Banana Pro via Replicate
-    const createResponse = await fetch('https://api.replicate.com/v1/models/google/nano-banana-pro/predictions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'wait=60'
-      },
-      body: JSON.stringify({
-        input: {
-          prompt: prompt,
-          image: base64Image,
-          aspect_ratio: "1:1"
+      try {
+        const result = await runModel(model, base64Image, prompt);
+        if (result.success) {
+          console.log(`[Generate] Success with ${model}!`);
+          return res.json({ success: true, outputUrl: result.outputUrl, model });
         }
-      })
-    });
-
-    const responseText = await createResponse.text();
-    console.log(`[Generate] API response status: ${createResponse.status}`);
-
-    let prediction;
-    try {
-      prediction = JSON.parse(responseText);
-    } catch (e) {
-      console.error('[Generate] Failed to parse:', responseText.substring(0, 300));
-      return res.status(500).json({ error: 'Invalid API response', detail: responseText.substring(0, 200) });
-    }
-
-    if (!createResponse.ok) {
-      console.error('[Generate] API error:', JSON.stringify(prediction).substring(0, 500));
-      return res.status(createResponse.status).json({
-        error: 'API error',
-        detail: prediction.detail || prediction.error || JSON.stringify(prediction).substring(0, 200)
-      });
-    }
-
-    // Check if result is ready (Prefer: wait should return completed)
-    if (prediction.status === 'succeeded' && prediction.output) {
-      const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
-      console.log(`[Generate] Success! Output URL ready.`);
-      return res.json({ success: true, outputUrl });
-    }
-
-    // If not ready yet, poll
-    if (prediction.id) {
-      console.log(`[Generate] Prediction ${prediction.id} - polling...`);
-      const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
-      const result = await pollPrediction(pollUrl);
-
-      if (result.status === 'succeeded' && result.output) {
-        const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
-        console.log(`[Generate] Success after polling!`);
-        return res.json({ success: true, outputUrl });
-      } else {
-        console.error(`[Generate] Failed:`, result.error || result.logs);
-        return res.status(500).json({
-          error: 'Generation failed',
-          detail: result.error || 'The AI model could not process this image. Try a different photo.'
-        });
+        console.log(`[Generate] ${model} failed: ${result.error} — trying next...`);
+      } catch (err) {
+        console.log(`[Generate] ${model} error: ${err.message} — trying next...`);
       }
     }
 
-    return res.status(500).json({ error: 'Unexpected response', detail: JSON.stringify(prediction).substring(0, 200) });
+    return res.status(500).json({
+      error: 'All models are currently unavailable. Please try again in a few minutes.'
+    });
 
   } catch (error) {
     console.error('[Generate] Server error:', error.message);
@@ -122,9 +74,54 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
   }
 });
 
-// Poll prediction status
+async function runModel(model, image, prompt) {
+  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'wait=60'
+    },
+    body: JSON.stringify({
+      input: {
+        prompt: prompt,
+        image: image
+      }
+    })
+  });
+
+  const prediction = await createResponse.json();
+  console.log(`[${model}] Status: ${createResponse.status}, prediction: ${prediction.status || 'N/A'}`);
+
+  if (!createResponse.ok) {
+    return { success: false, error: prediction.detail || JSON.stringify(prediction) };
+  }
+
+  if (prediction.status === 'succeeded' && prediction.output) {
+    const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    return { success: true, outputUrl };
+  }
+
+  if (prediction.status === 'failed') {
+    return { success: false, error: prediction.error || 'Model failed' };
+  }
+
+  if (prediction.id) {
+    const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
+    const result = await pollPrediction(pollUrl);
+
+    if (result.status === 'succeeded' && result.output) {
+      const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+      return { success: true, outputUrl };
+    }
+    return { success: false, error: result.error || 'Generation failed' };
+  }
+
+  return { success: false, error: 'Unexpected response' };
+}
+
 async function pollPrediction(url) {
-  const maxAttempts = 60;
+  const maxAttempts = 40;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
@@ -132,7 +129,7 @@ async function pollPrediction(url) {
       headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
     });
     const data = await response.json();
-    console.log(`[Poll] Status: ${data.status} (${attempts * 3}s elapsed)`);
+    console.log(`[Poll] ${data.status} (${attempts * 3}s)`);
 
     if (['succeeded', 'failed', 'canceled'].includes(data.status)) {
       return data;
@@ -142,40 +139,31 @@ async function pollPrediction(url) {
     await new Promise(r => setTimeout(r, 3000));
   }
 
-  throw new Error('Timed out after 3 minutes');
+  return { status: 'failed', error: 'Timed out' };
 }
 
-// Build professional hair transplant prompt for Nano Banana Pro
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'with a subtle, natural-looking increase in hair density',
-    medium: 'with moderate, natural hair density and good coverage',
-    high: 'with thick, dense, full hair coverage'
+    low: 'slightly more hair',
+    medium: 'noticeably more hair with good coverage',
+    high: 'a full thick head of hair'
   };
-
-  const styleDesc = {
-    natural: 'naturally distributed follicles with organic growth patterns',
-    dense: 'dense, uniform hair coverage',
-    subtle: 'subtle, barely noticeable improvement in hair thickness'
-  };
-
   const hairlineDesc = {
-    'age-appropriate': 'a natural, age-appropriate hairline',
-    'youthful': 'a youthful, slightly lower hairline with full frontal coverage',
-    'mature': 'a mature, dignified hairline'
+    'age-appropriate': '',
+    'youthful': 'with a lower, more youthful hairline',
+    'mature': 'maintaining a mature hairline'
   };
 
-  return `Edit this photo to show a realistic hair transplant result. Add natural-looking hair to the balding or thinning areas of the scalp, ${densityDesc[density] || densityDesc.medium}, with ${styleDesc[style] || styleDesc.natural} and ${hairlineDesc[hairline] || hairlineDesc['age-appropriate']}. The new hair must perfectly match the existing hair color, texture, and direction. Keep EVERYTHING else in the photo EXACTLY the same — the face, skin, eyes, nose, mouth, ears, clothing, background, lighting, and angle must be completely unchanged and identical to the original. Only modify the hair and scalp area. The result should look like a real professional photograph taken after a successful hair transplant surgery, not AI-generated.`;
+  return `This is a photo of a person with hair loss. Make ONLY ONE change: add ${densityDesc[density] || densityDesc.medium} on top of their head ${hairlineDesc[hairline] || ''}. The hair must match their existing hair color and texture exactly. DO NOT change ANYTHING else. The person's face, expression, skin, eyes, nose, mouth, jaw, ears, neck, body, clothing, and background must remain PIXEL-PERFECT IDENTICAL to the input photo. Do not change the person's age, weight, or any facial features. Do not change the camera angle or lighting. Only add hair to the bald/thinning areas of the scalp.`;
 }
 
-// Serve frontend for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🍌 Model: Google Nano Banana Pro`);
+  console.log(`🍌 Models: Nano Banana Pro → Nano Banana (fallback)`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
