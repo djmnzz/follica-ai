@@ -27,7 +27,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    version: '2.0' // Añadí esto para que sepamos si se actualizó
   });
 });
 
@@ -51,7 +52,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 
     console.log(`[Generate] Starting - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
-    // CORRECCIÓN 1: Endpoint cambiado al modelo principal de stable-diffusion
     const createResponse = await fetch('https://api.replicate.com/v1/models/stability-ai/stable-diffusion/predictions', {
       method: 'POST',
       headers: {
@@ -61,7 +61,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       },
       body: JSON.stringify({
         input: {
-          // CORRECCIÓN 2: Cambiado 'image' a 'init_image'
           init_image: base64Image, 
           prompt: prompt,
           negative_prompt: negativePrompt,
@@ -92,14 +91,12 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       });
     }
 
-    // If using Prefer: wait, the response might already be complete
     if (prediction.status === 'succeeded' && prediction.output) {
       const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
       console.log(`[Generate] Instant success!`);
       return res.json({ success: true, outputUrl });
     }
 
-    // Otherwise poll for result
     if (prediction.id) {
       console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
       const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
@@ -114,7 +111,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       }
     }
 
-    // Fallback
     return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
 
   } catch (error) {
@@ -143,41 +139,4 @@ async function pollPrediction(url) {
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
-  throw new Error('Prediction timed out after 3 minutes');
-}
-
-// Build optimized hair transplant prompt
-function buildHairPrompt(style, density, hairline) {
-  const densityMap = {
-    low: 'subtle natural hair density improvement',
-    medium: 'moderate natural hair density, full coverage',
-    high: 'thick dense full head of hair, maximum coverage'
-  };
-  const styleMap = {
-    natural: 'naturally distributed hair follicles, organic hair growth pattern',
-    dense: 'dense uniform hair coverage, thick hair',
-    subtle: 'subtle improvement, slightly thicker hair, minimal change'
-  };
-  const hairlineMap = {
-    'age-appropriate': 'age-appropriate natural mature hairline',
-    'youthful': 'youthful lower hairline, full frontal coverage',
-    'mature': 'mature dignified hairline, natural recession maintained'
-  };
-
-  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED`;
-}
-
-function buildNegativePrompt() {
-  return 'cartoon, anime, illustration, painting, drawing, art, sketch, CGI, 3D render, changed face, different person, altered facial features, different skin color, modified eyes, changed nose, different mouth, wig, fake hair, plastic, distorted, deformed, blurry, low quality, watermark, text, logo, different clothing, different background, different angle, different lighting';
-}
-
-// Serve frontend
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`🌐 Open: http://localhost:${PORT}\n`);
-});
+  throw new Error('Prediction timed out
