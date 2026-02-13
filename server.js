@@ -168,12 +168,12 @@ async function pollPrediction(url) {
 
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'slightly more hair',
-    medium: 'a full natural head of hair',
-    high: 'thick dense hair with maximum coverage'
+    low: 'with moderate density',
+    medium: 'with full thick density',
+    high: 'with very thick maximum density'
   };
 
-  return `Look at this person's existing hair color carefully. Now give this same identical person ${densityDesc[density] || densityDesc.medium} covering ALL bald and thinning areas on the top of their head. Fill in the temples and front completely — NO receding hairline, NO bald spots, NO thin patches, NO visible scalp where there was balding. The new hair MUST be the IDENTICAL color and shade as the hair this person already has on the sides and back of their head — sample the exact color from their existing hair. Do NOT make it darker, do NOT make it lighter, do NOT change the hue. Do NOT touch ANYTHING below the forehead: same face, same eyes, same nose, same mouth, same ears, same beard, same mustache, same facial hair, same sideburns, same eyebrows, same skin, same wrinkles, same clothing, same background, same lighting, same camera angle. Do NOT rotate or flip the image. The hair should look completely natural and real, like a professional photograph — with individual strands visible, natural volume, and the way real hair falls naturally. Not a wig, not artificial, not computer generated looking.`;
+  return `This person has thinning hair or baldness on top of their head. Give them a full head of hair ${densityDesc[density] || densityDesc.medium}. Grow thick natural hair covering their entire scalp — fill the top, the crown, the temples, and the front hairline completely. No bald patches, no thin spots, no receding temples. The hair should be abundant and full. VERY IMPORTANT about the hair color: look at the hair this person currently has on the sides of their head — the new hair on top must be that EXACT SAME color. If their hair is blonde, add blonde hair. If light brown, add light brown. If red, add red. If gray, add gray. Do NOT default to dark brown or black. Match the exact shade from their existing hair. The rest of the photo stays identical: same person, same face, same eyes, same glasses, same beard, same facial hair, same mustache, same ears, same skin tone, same expression, same clothing, same background, same lighting, same angle. Do not rotate or flip the image. The hair must look photorealistic — natural strands, natural volume, the way real hair looks in a real photo.`;
 }
 
 app.get('*', (req, res) => {
