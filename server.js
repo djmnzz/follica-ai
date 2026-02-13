@@ -45,3 +45,139 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const style = req.body.style || 'natural';
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
+
+    const prompt = buildHairPrompt(style, density, hairline);
+    const negativePrompt = buildNegativePrompt();
+
+    console.log(`[Generate] Starting - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+
+    // CORRECCIÓN 1: Endpoint cambiado al modelo principal de stable-diffusion
+    const createResponse = await fetch('https://api.replicate.com/v1/models/stability-ai/stable-diffusion/predictions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'wait'
+      },
+      body: JSON.stringify({
+        input: {
+          // CORRECCIÓN 2: Cambiado 'image' a 'init_image'
+          init_image: base64Image, 
+          prompt: prompt,
+          negative_prompt: negativePrompt,
+          num_inference_steps: 30,
+          guidance_scale: 7.5,
+          prompt_strength: 0.45,
+          scheduler: "K_EULER_ANCESTRAL"
+        }
+      })
+    });
+
+    const responseText = await createResponse.text();
+    console.log(`[Generate] API response status: ${createResponse.status}`);
+
+    let prediction;
+    try {
+      prediction = JSON.parse(responseText);
+    } catch (e) {
+      console.error('[Generate] Failed to parse response:', responseText.substring(0, 500));
+      return res.status(500).json({ error: 'Invalid API response', detail: responseText.substring(0, 200) });
+    }
+
+    if (!createResponse.ok) {
+      console.error('[Generate] API error:', prediction);
+      return res.status(createResponse.status).json({
+        error: 'API error',
+        detail: prediction.detail || prediction.error || JSON.stringify(prediction)
+      });
+    }
+
+    // If using Prefer: wait, the response might already be complete
+    if (prediction.status === 'succeeded' && prediction.output) {
+      const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+      console.log(`[Generate] Instant success!`);
+      return res.json({ success: true, outputUrl });
+    }
+
+    // Otherwise poll for result
+    if (prediction.id) {
+      console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
+      const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
+
+      if (result.status === 'succeeded') {
+        const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+        console.log(`[Generate] Success!`);
+        return res.json({ success: true, outputUrl });
+      } else {
+        console.error(`[Generate] Failed:`, result.error);
+        return res.status(500).json({ error: 'Generation failed', detail: result.error || 'Unknown error' });
+      }
+    }
+
+    // Fallback
+    return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
+
+  } catch (error) {
+    console.error('[Generate] Server error:', error.message);
+    res.status(500).json({ error: 'Server error', detail: error.message });
+  }
+});
+
+// Poll prediction status
+async function pollPrediction(url) {
+  const maxAttempts = 60;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
+    });
+    const prediction = await response.json();
+    console.log(`[Poll] Status: ${prediction.status} (${attempts * 3}s)`);
+
+    if (['succeeded', 'failed', 'canceled'].includes(prediction.status)) {
+      return prediction;
+    }
+
+    attempts++;
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  throw new Error('Prediction timed out after 3 minutes');
+}
+
+// Build optimized hair transplant prompt
+function buildHairPrompt(style, density, hairline) {
+  const densityMap = {
+    low: 'subtle natural hair density improvement',
+    medium: 'moderate natural hair density, full coverage',
+    high: 'thick dense full head of hair, maximum coverage'
+  };
+  const styleMap = {
+    natural: 'naturally distributed hair follicles, organic hair growth pattern',
+    dense: 'dense uniform hair coverage, thick hair',
+    subtle: 'subtle improvement, slightly thicker hair, minimal change'
+  };
+  const hairlineMap = {
+    'age-appropriate': 'age-appropriate natural mature hairline',
+    'youthful': 'youthful lower hairline, full frontal coverage',
+    'mature': 'mature dignified hairline, natural recession maintained'
+  };
+
+  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED`;
+}
+
+function buildNegativePrompt() {
+  return 'cartoon, anime, illustration, painting, drawing, art, sketch, CGI, 3D render, changed face, different person, altered facial features, different skin color, modified eyes, changed nose, different mouth, wig, fake hair, plastic, distorted, deformed, blurry, low quality, watermark, text, logo, different clothing, different background, different angle, different lighting';
+}
+
+// Serve frontend
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
+  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
+  console.log(`🌐 Open: http://localhost:${PORT}\n`);
+});
