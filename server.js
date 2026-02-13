@@ -58,7 +58,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       headers: {
         'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
         'Content-Type': 'application/json',
-        'Prefer': 'wait=120'
+        'Prefer': 'wait=60'
       },
       body: JSON.stringify({
         input: {
