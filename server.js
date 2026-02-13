@@ -1,278 +1,258 @@
-/**
- * server.js (LIVE)
- * Auto-mask (LangSAM) + SDXL Inpainting (Replicate) for Hair Transplant Before/After
- * - Fully automatic mask (no clicks)
- * - Optional "draft" mode to spend fewer credits while testing
- * - Simple in-memory cache to avoid re-paying for identical requests
- * - Replicate connection status endpoint: /api/replicate/status
- *
- * Requirements:
- *   - Node 18+ (fetch included). If Node < 18, install node-fetch.
- *   - env: REPLICATE_API_TOKEN
- */
+// server.js
+// Follica AI Server + SaaS Credits (in-memory)
+// - Adds /api/credits, /api/credits/add, /api/credits/reset
+// - Charges 1 credit per /api/generate (refunds on failure)
 
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
 const path = require("path");
-const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 
-// ---- Middleware
+// ==============================
+// ✅ SaaS Credits (in-memory)
+// ==============================
+const DEFAULT_CREDITS = Number(process.env.DEFAULT_CREDITS || 100); // start with 100
+let credits = Number.isFinite(DEFAULT_CREDITS) ? DEFAULT_CREDITS : 100;
+
+function spendCredits(amount = 1) {
+  if (credits < amount) return false;
+  credits -= amount;
+  return true;
+}
+function refundCredits(amount = 1) {
+  credits += amount;
+}
+
+// Middleware
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// ---- Upload (memory)
+// Multer for file uploads (memory storage)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files allowed"), false);
+  },
 });
 
-// ---- Health
+// ==============================
+// ✅ Credits API
+// ==============================
+
+// Get current credits
+app.get("/api/credits", (req, res) => {
+  res.json({ success: true, credits });
+});
+
+// Add credits (e.g. { "amount": 100 })
+app.post("/api/credits/add", (req, res) => {
+  const amount = Number(req.body?.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ success: false, error: "invalid_amount" });
+  }
+  credits += amount;
+  return res.json({ success: true, credits });
+});
+
+// Reset credits (optional) (e.g. { "amount": 100 })
+app.post("/api/credits/reset", (req, res) => {
+  const amount = Number(req.body?.amount ?? DEFAULT_CREDITS);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ success: false, error: "invalid_amount" });
+  }
+  credits = amount;
+  return res.json({ success: true, credits });
+});
+
+// Health check
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "15.0 - LIVE Replicate (LangSAM mask + SDXL inpaint) + status endpoint + cache",
+    hasApiKey: !!REPLICATE_API_TOKEN,
+    credits,
+    timestamp: new Date().toISOString(),
+    version: "11.1 - Professional Descriptive Style (No Celebs) + SaaS Credits",
   });
 });
 
-// ---- Replicate status (verifica token/billing sin exponer secretos)
-app.get("/api/replicate/status", async (req, res) => {
-  try {
-    if (!REPLICATE_API_TOKEN) {
-      return res.status(200).json({ connected: false, reason: "missing_token" });
-    }
+// Generate AI hair transplant result
+app.post("/api/generate", upload.single("image"), async (req, res) => {
+  // 1) Validate input
+  if (!req.file) {
+    return res.status(400).json({ error: "No image uploaded" });
+  }
 
-    // Endpoint simple de cuenta (si token es válido responde 200)
-    const r = await fetch("https://api.replicate.com/v1/account", {
-      headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` },
+  // 2) Validate Replicate token
+  if (!REPLICATE_API_TOKEN) {
+    return res.status(500).json({ error: "API token not configured." });
+  }
+
+  // 3) Charge 1 credit upfront
+  const charged = spendCredits(1);
+  if (!charged) {
+    return res.status(402).json({
+      error: "No credits available",
+      detail: "You have 0 credits. Please add credits to continue.",
+      credits,
+    });
+  }
+
+  try {
+    const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
+      "base64"
+    )}`;
+    const style = req.body.style || "natural";
+    const density = req.body.density || "medium";
+    const hairline = req.body.hairline || "age-appropriate";
+
+    const prompt = buildHairPrompt(style, density, hairline);
+    const negativePrompt = buildNegativePrompt();
+
+    console.log(
+      `[Generate] Starting PRO Descriptive - Style: ${style} | Credits left after charge: ${credits}`
+    );
+
+    const createResponse = await fetch("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
+        "Content-Type": "application/json",
+        Prefer: "wait",
+      },
+      body: JSON.stringify({
+        // Realistic Vision V5.1
+        version: "9936c2001faa2194a261c01381f90e65261879985476014a0a37a334593a05eb",
+        input: {
+          image: base64Image,
+          prompt: prompt,
+          negative_prompt: negativePrompt,
+          // Keep identity
+          prompt_strength: 0.35,
+          num_inference_steps: 40,
+          guidance_scale: 7,
+          scheduler: "K_EULER_ANCESTRAL",
+          disable_safety_checker: true,
+        },
+      }),
     });
 
-    const data = await r.json();
+    const responseText = await createResponse.text();
+    console.log(`[Generate] API response status: ${createResponse.status}`);
 
-    if (!r.ok) {
-      return res.status(200).json({
-        connected: false,
-        reason: "replicate_error",
-        status: r.status,
-        detail: data?.detail || data,
+    let prediction;
+    try {
+      prediction = JSON.parse(responseText);
+    } catch (e) {
+      console.error("[Generate] Failed to parse response:", responseText.substring(0, 500));
+      refundCredits(1); // refund on failure
+      return res.status(500).json({
+        error: "Invalid API response",
+        detail: responseText.substring(0, 200),
+        credits,
       });
     }
 
-    return res.status(200).json({
-      connected: true,
-      account: {
-        // devolvemos algo útil pero no enorme
-        username: data?.username,
-        name: data?.name,
-        type: data?.type,
-      },
+    if (!createResponse.ok) {
+      console.error("[Generate] API error:", prediction);
+      refundCredits(1); // refund on failure
+      return res.status(createResponse.status).json({
+        error: "API error",
+        detail: prediction.detail || prediction.error || JSON.stringify(prediction),
+        credits,
+      });
+    }
+
+    // Sometimes "Prefer: wait" returns succeeded immediately
+    if (prediction.status === "succeeded" && prediction.output) {
+      const outputUrl = Array.isArray(prediction.output)
+        ? prediction.output[0]
+        : prediction.output;
+      console.log("[Generate] Instant success!");
+      return res.json({ success: true, outputUrl, credits });
+    }
+
+    // Otherwise poll
+    if (prediction.id) {
+      console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
+      const result = await pollPrediction(
+        prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`
+      );
+
+      if (result.status === "succeeded") {
+        const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+        console.log("[Generate] Success!");
+        return res.json({ success: true, outputUrl, credits });
+      } else {
+        console.error("[Generate] Failed:", result.error);
+        refundCredits(1); // refund on failure
+        return res.status(500).json({
+          error: "Generation failed",
+          detail: result.error || "Unknown error",
+          credits,
+        });
+      }
+    }
+
+    // Unexpected response => refund
+    refundCredits(1);
+    return res.status(500).json({
+      error: "Unexpected API response",
+      detail: JSON.stringify(prediction).substring(0, 200),
+      credits,
     });
-  } catch (e) {
-    return res.status(200).json({
-      connected: false,
-      reason: "network_or_server_error",
-      detail: e.message,
-    });
-  }
-});
-
-/**
- * Replicate helper (version hash) using predictions endpoint + polling.
- * Uses Prefer: wait for faster sync, but still polls in case it's async.
- */
-async function runReplicateAPI(versionHash, inputConfig, token) {
-  const url = "https://api.replicate.com/v1/predictions";
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Prefer: "wait",
-    },
-    body: JSON.stringify({ version: versionHash, input: inputConfig }),
-  });
-
-  let prediction = await response.json();
-
-  if (!response.ok) {
-    console.error("[Replicate API Error]", prediction);
-    throw new Error(prediction.detail || JSON.stringify(prediction));
-  }
-
-  let attempts = 0;
-  while (!["succeeded", "failed", "canceled"].includes(prediction.status)) {
-    if (attempts > 80) throw new Error("Timeout esperando a Replicate");
-    await new Promise((r) => setTimeout(r, 2500));
-
-    const pollResponse = await fetch(prediction.urls.get, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    prediction = await pollResponse.json();
-    attempts++;
-  }
-
-  if (prediction.status !== "succeeded") {
-    throw new Error(`Replicate falló: ${prediction.error || prediction.status}`);
-  }
-
-  return prediction.output;
-}
-
-/**
- * Simple cache to avoid spending credits repeatedly while testing.
- * Key: hash(image + params)
- */
-const memoryCache = new Map();
-function makeCacheKey(buffer, paramsObj) {
-  const h = crypto.createHash("sha256");
-  h.update(buffer);
-  h.update(JSON.stringify(paramsObj || {}));
-  return h.digest("hex");
-}
-
-/**
- * PROMPT builder (hair style/density)
- */
-function buildHairPrompt({ style, density }) {
-  const densityMap = {
-    low: "slightly thicker hair with a subtle improvement",
-    medium: "a full head of thick, dense hair",
-    high: "very thick, very dense hair with maximum coverage",
-  };
-
-  const densityText = densityMap[density] || densityMap.medium;
-
-  const styleText =
-    style === "curly"
-      ? "curly"
-      : style === "wavy"
-      ? "wavy"
-      : style === "straight"
-      ? "straight"
-      : "natural";
-
-  return {
-    prompt:
-      `A professional portrait photograph of the same person. ` +
-      `Add realistic ${styleText} hair. The person now has ${densityText} and a natural youthful hairline. ` +
-      `Keep the face, eyes, skin, facial features, lighting, and background identical to the original. ` +
-      `Photorealistic. High detail.`,
-    negative:
-      "bald, thinning, receding, unnatural hairline, wig, plastic skin, distorted face, changed eyes, " +
-      "extra fingers, blur, low quality, artifacts",
-  };
-}
-
-/**
- * Versions (hashes) used
- * - LangSAM (segment anything by text): returns mask URI
- * - SDXL Inpainting: uses image + mask to inpaint hair area
- */
-const LANGSAM_VERSION =
-  "891411c38a6ed2d44c004b7b9e44217df7a5b07848f29ddefd2e28bc7cbf93bc";
-const SDXL_INPAINT_VERSION =
-  "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b";
-
-/**
- * Generate endpoint
- * - image: multipart/form-data "image"
- * - body fields: style, density, draft, useCache
- */
-app.post("/api/generate", upload.single("image"), async (req, res) => {
-  try {
-    if (!REPLICATE_API_TOKEN) {
-      return res.status(500).json({ error: "Falta el REPLICATE_API_TOKEN en env" });
-    }
-    if (!req.file) return res.status(400).json({ error: "No se subió imagen" });
-
-    // Params
-    const style = (req.body.style || "natural").toLowerCase();
-    const density = (req.body.density || "medium").toLowerCase();
-    const draft = String(req.body.draft || "false").toLowerCase() === "true";
-    const useCache = String(req.body.useCache || "true").toLowerCase() !== "false";
-
-    // Make base64 data URL
-    const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
-
-    // Cache
-    const cacheKey = makeCacheKey(req.file.buffer, { style, density, draft });
-    if (useCache && memoryCache.has(cacheKey)) {
-      return res.json({ success: true, outputUrl: memoryCache.get(cacheKey), cached: true, draft });
-    }
-
-    /**
-     * STEP 1: AUTO MASK (LangSAM)
-     * Goal: select scalp/bald area to replace with hair (white mask area = gets inpainted).
-     */
-    console.log("[Generate] Step 1: Auto-mask scalp/bald area...");
-    const maskOutput = await runReplicateAPI(
-      LANGSAM_VERSION,
-      {
-        image: base64Image,
-        text_prompt: "scalp, bald scalp, bald area, receding hairline, forehead hairline",
-      },
-      REPLICATE_API_TOKEN
-    );
-
-    // Normalize mask output to a URL string
-    let maskUrl = maskOutput;
-    if (Array.isArray(maskOutput)) maskUrl = maskOutput[0];
-    if (maskOutput && typeof maskOutput === "object") {
-      maskUrl = maskOutput.mask || maskOutput.output || maskOutput.uri || maskOutput.url || maskOutput;
-    }
-    if (!maskUrl || typeof maskUrl !== "string") {
-      throw new Error("No se pudo obtener maskUrl válido desde LangSAM.");
-    }
-
-    /**
-     * STEP 2: SDXL Inpainting
-     * draft=true => cheaper testing
-     */
-    console.log("[Generate] Step 2: SDXL inpaint hair...");
-    const { prompt, negative } = buildHairPrompt({ style, density });
-
-    const numSteps = draft ? 18 : 35;
-    const guidance = draft ? 6.5 : 8.0;
-    const strength = draft ? 0.65 : 0.75; // lower preserves identity more
-
-    const finalOutput = await runReplicateAPI(
-      SDXL_INPAINT_VERSION,
-      {
-        image: base64Image,
-        mask: maskUrl,
-        prompt,
-        negative_prompt: negative,
-        prompt_strength: strength,
-        num_inference_steps: numSteps,
-        guidance_scale: guidance,
-        disable_safety_checker: true,
-      },
-      REPLICATE_API_TOKEN
-    );
-
-    let outputUrl = finalOutput;
-    if (Array.isArray(finalOutput)) outputUrl = finalOutput[0];
-    if (!outputUrl || typeof outputUrl !== "string") {
-      throw new Error("No se pudo obtener outputUrl válido desde SDXL.");
-    }
-
-    if (useCache) memoryCache.set(cacheKey, outputUrl);
-
-    return res.json({ success: true, outputUrl, cached: false, draft });
   } catch (error) {
-    console.error("[Generate] Error Fatal:", error.message);
-    res.status(500).json({ error: "Error en la generación", detail: error.message });
+    console.error("[Generate] Server error:", error.message);
+    refundCredits(1); // refund on failure
+    res.status(500).json({ error: "Server error", detail: error.message, credits });
   }
 });
 
-// SPA fallback
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+async function pollPrediction(url) {
+  const maxAttempts = 60;
+  let attempts = 0;
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  while (attempts < maxAttempts) {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` },
+    });
+    const prediction = await response.json();
+    console.log(`[Poll] Status: ${prediction.status} (${attempts * 3}s)`);
+
+    if (["succeeded", "failed", "canceled"].includes(prediction.status)) {
+      return prediction;
+    }
+
+    attempts++;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+
+  throw new Error("Prediction timed out after 3 minutes");
+}
+
+// PROMPTS (NO CELEBS)
+function buildHairPrompt(style, density, hairline) {
+  // You can expand these mappings later if you want
+  return `Based on image_0.png, the man now has a full head of ultra-thick, dense, healthy hair. It is a modern, professionally groomed hairstyle with perfect volume. All receding areas and bald spots are completely filled in with a sharp, flawless, youthful hairline with absolutely no recession. The hair texture is realistic. Crucially, the man's face, facial structure, skin, eyes, expression, clothing, and the background are absolutely identical to image_0.png. Only the hair changed. Photorealistic, 8k, highly detailed.`;
+}
+
+function buildNegativePrompt() {
+  return "changed face, different person, altered facial features, plastic surgery look, distorted face, blurry eyes, receding hairline, bald spots, thinning hair, low quality, ugly, deformed, watermark, text, celebrity lookalike";
+}
+
+// Serve frontend
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.listen(PORT, () => {
+  console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
+  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? "✅ Configured" : "❌ Missing"}`);
+  console.log(`💳 SaaS Credits (in-memory): ${credits}`);
+});
