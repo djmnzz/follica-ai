@@ -1,9 +1,14 @@
 /**
- * server.js
+ * server.js (LIVE)
  * Auto-mask (LangSAM) + SDXL Inpainting (Replicate) for Hair Transplant Before/After
  * - Fully automatic mask (no clicks)
  * - Optional "draft" mode to spend fewer credits while testing
  * - Simple in-memory cache to avoid re-paying for identical requests
+ * - Replicate connection status endpoint: /api/replicate/status
+ *
+ * Requirements:
+ *   - Node 18+ (fetch included). If Node < 18, install node-fetch.
+ *   - env: REPLICATE_API_TOKEN
  */
 
 const express = require("express");
@@ -16,17 +21,64 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 
+// ---- Middleware
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
+// ---- Upload (memory)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 
+// ---- Health
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", version: "14.0 - Auto Mask (LangSAM) + SDXL Inpaint + Cache" });
+  res.json({
+    status: "ok",
+    version: "15.0 - LIVE Replicate (LangSAM mask + SDXL inpaint) + status endpoint + cache",
+  });
+});
+
+// ---- Replicate status (verifica token/billing sin exponer secretos)
+app.get("/api/replicate/status", async (req, res) => {
+  try {
+    if (!REPLICATE_API_TOKEN) {
+      return res.status(200).json({ connected: false, reason: "missing_token" });
+    }
+
+    // Endpoint simple de cuenta (si token es válido responde 200)
+    const r = await fetch("https://api.replicate.com/v1/account", {
+      headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` },
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      return res.status(200).json({
+        connected: false,
+        reason: "replicate_error",
+        status: r.status,
+        detail: data?.detail || data,
+      });
+    }
+
+    return res.status(200).json({
+      connected: true,
+      account: {
+        // devolvemos algo útil pero no enorme
+        username: data?.username,
+        name: data?.name,
+        type: data?.type,
+      },
+    });
+  } catch (e) {
+    return res.status(200).json({
+      connected: false,
+      reason: "network_or_server_error",
+      detail: e.message,
+    });
+  }
 });
 
 /**
@@ -96,6 +148,7 @@ function buildHairPrompt({ style, density }) {
   };
 
   const densityText = densityMap[density] || densityMap.medium;
+
   const styleText =
     style === "curly"
       ? "curly"
@@ -106,8 +159,14 @@ function buildHairPrompt({ style, density }) {
       : "natural";
 
   return {
-    prompt: `A professional portrait photograph of the same person. Add realistic ${styleText} hair. The person now has ${densityText} and a natural youthful hairline. Keep the face, eyes, skin, facial features, lighting, and background identical to the original. Photorealistic. High detail.`,
-    negative: "bald, thinning, receding, unnatural hairline, wig, plastic skin, distorted face, changed eyes, extra fingers, blur, low quality, artifacts",
+    prompt:
+      `A professional portrait photograph of the same person. ` +
+      `Add realistic ${styleText} hair. The person now has ${densityText} and a natural youthful hairline. ` +
+      `Keep the face, eyes, skin, facial features, lighting, and background identical to the original. ` +
+      `Photorealistic. High detail.`,
+    negative:
+      "bald, thinning, receding, unnatural hairline, wig, plastic skin, distorted face, changed eyes, " +
+      "extra fingers, blur, low quality, artifacts",
   };
 }
 
@@ -136,7 +195,7 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
     // Params
     const style = (req.body.style || "natural").toLowerCase();
     const density = (req.body.density || "medium").toLowerCase();
-    const draft = String(req.body.draft || "false").toLowerCase() === "true"; // cheaper testing
+    const draft = String(req.body.draft || "false").toLowerCase() === "true";
     const useCache = String(req.body.useCache || "true").toLowerCase() !== "false";
 
     // Make base64 data URL
@@ -145,48 +204,43 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
     // Cache
     const cacheKey = makeCacheKey(req.file.buffer, { style, density, draft });
     if (useCache && memoryCache.has(cacheKey)) {
-      return res.json({ success: true, outputUrl: memoryCache.get(cacheKey), cached: true });
+      return res.json({ success: true, outputUrl: memoryCache.get(cacheKey), cached: true, draft });
     }
 
     /**
-     * PASO 1: AUTO MASK (LangSAM)
-     * Queremos marcar el área de cuero cabelludo / calvicie para “rellenar” con cabello.
-     * Importante: En inpainting, el mask (blanco) = zona que se reemplaza.
+     * STEP 1: AUTO MASK (LangSAM)
+     * Goal: select scalp/bald area to replace with hair (white mask area = gets inpainted).
      */
-    console.log("[Generate] Paso 1: Auto-máscara de calvicie/cabello...");
+    console.log("[Generate] Step 1: Auto-mask scalp/bald area...");
     const maskOutput = await runReplicateAPI(
       LANGSAM_VERSION,
       {
         image: base64Image,
-        // Prompt recomendado para detectar zona a rellenar (scalp/bald area/hairline)
         text_prompt: "scalp, bald scalp, bald area, receding hairline, forehead hairline",
       },
       REPLICATE_API_TOKEN
     );
 
-    // LangSAM normalmente devuelve un string (URI) o un objeto; intentamos normalizar:
+    // Normalize mask output to a URL string
     let maskUrl = maskOutput;
     if (Array.isArray(maskOutput)) maskUrl = maskOutput[0];
     if (maskOutput && typeof maskOutput === "object") {
-      // Algunos modelos devuelven { mask: "..."} o { output: "..."}
       maskUrl = maskOutput.mask || maskOutput.output || maskOutput.uri || maskOutput.url || maskOutput;
     }
-
     if (!maskUrl || typeof maskUrl !== "string") {
       throw new Error("No se pudo obtener maskUrl válido desde LangSAM.");
     }
 
     /**
-     * PASO 2: SDXL Inpainting
-     * draft=true reduce steps => menos costo mientras probás
+     * STEP 2: SDXL Inpainting
+     * draft=true => cheaper testing
      */
-    console.log("[Generate] Paso 2: Inpainting SDXL (cabello nuevo)...");
+    console.log("[Generate] Step 2: SDXL inpaint hair...");
     const { prompt, negative } = buildHairPrompt({ style, density });
 
-    // Config “barata” para pruebas vs “final”
     const numSteps = draft ? 18 : 35;
     const guidance = draft ? 6.5 : 8.0;
-    const strength = draft ? 0.65 : 0.75; // más bajo preserva rasgos (evita que cambie la cara)
+    const strength = draft ? 0.65 : 0.75; // lower preserves identity more
 
     const finalOutput = await runReplicateAPI(
       SDXL_INPAINT_VERSION,
@@ -198,9 +252,6 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
         prompt_strength: strength,
         num_inference_steps: numSteps,
         guidance_scale: guidance,
-
-        // OJO: si tu caso requiere, podés quitar esto para evitar bloqueos.
-        // (si lo deshabilitás, asumís responsabilidad por contenido; en tu caso es cosmético)
         disable_safety_checker: true,
       },
       REPLICATE_API_TOKEN
@@ -208,7 +259,6 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
 
     let outputUrl = finalOutput;
     if (Array.isArray(finalOutput)) outputUrl = finalOutput[0];
-
     if (!outputUrl || typeof outputUrl !== "string") {
       throw new Error("No se pudo obtener outputUrl válido desde SDXL.");
     }
