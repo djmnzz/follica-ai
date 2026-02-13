@@ -29,24 +29,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-const MODELS = [
-  {
-    id: 'black-forest-labs/flux-kontext-pro',
-    imageField: 'input_image',
-    extraParams: {}
-  },
-  {
-    id: 'google/nano-banana-pro',
-    imageField: 'image',
-    extraParams: {}
-  },
-  {
-    id: 'google/nano-banana',
-    imageField: 'image',
-    extraParams: {}
-  }
-];
-
 async function getAspectRatio(buffer) {
   try {
     const metadata = await sharp(buffer).metadata();
@@ -80,49 +62,62 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const aspectRatio = await getAspectRatio(req.file.buffer);
     console.log(`[Generate] Aspect ratio: ${aspectRatio}`);
 
-    for (const model of MODELS) {
-      console.log(`[Generate] Trying ${model.id}...`);
+    // Try Flux Kontext Pro up to 3 times
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`[Generate] Attempt ${attempt}/${maxRetries} with Flux Kontext Pro...`);
+
       try {
-        const result = await runModel(model, base64Image, prompt, aspectRatio);
+        const result = await runFluxKontext(base64Image, prompt, aspectRatio);
         if (result.success) {
-          console.log(`[Generate] Success with ${model.id}!`);
-          return res.json({ success: true, outputUrl: result.outputUrl, model: model.id });
+          console.log(`[Generate] ✅ Success on attempt ${attempt}!`);
+          return res.json({ success: true, outputUrl: result.outputUrl, model: 'flux-kontext-pro' });
         }
-        console.log(`[Generate] ${model.id} failed: ${result.error}`);
+        console.log(`[Generate] Attempt ${attempt} failed: ${result.error}`);
+
+        // Wait 2 seconds before retry
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
       } catch (err) {
-        console.log(`[Generate] ${model.id} error: ${err.message}`);
+        console.log(`[Generate] Attempt ${attempt} error: ${err.message}`);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
       }
     }
 
     return res.status(500).json({
-      error: 'All models are currently unavailable. Please try again in a few minutes.'
+      error: 'The AI model is currently busy. Please try again in a moment.'
     });
+
   } catch (error) {
     console.error('[Generate] Server error:', error.message);
     res.status(500).json({ error: 'Server error', detail: error.message });
   }
 });
 
-async function runModel(model, image, prompt, aspectRatio) {
-  const inputPayload = {
-    prompt: prompt,
-    [model.imageField]: image,
-    aspect_ratio: aspectRatio,
-    ...model.extraParams
-  };
-
-  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model.id}/predictions`, {
+async function runFluxKontext(image, prompt, aspectRatio) {
+  const createResponse = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
       'Prefer': 'wait=60'
     },
-    body: JSON.stringify({ input: inputPayload })
+    body: JSON.stringify({
+      input: {
+        prompt: prompt,
+        input_image: image,
+        aspect_ratio: aspectRatio,
+        safety_tolerance: 5,
+        output_quality: 90
+      }
+    })
   });
 
   const prediction = await createResponse.json();
-  console.log(`[${model.id}] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
+  console.log(`[Flux] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
 
   if (!createResponse.ok) {
     return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
@@ -182,7 +177,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🎯 Models: Flux Kontext Pro > Nano Banana Pro > Nano Banana`);
+  console.log(`🎯 Model: Flux Kontext Pro (with retry)`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
