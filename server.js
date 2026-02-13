@@ -43,9 +43,9 @@ async function generateHairMask(width, height) {
   // Create an SVG mask with an ellipse covering the top of the head
   // The ellipse is wide and positioned in the upper portion
   const centerX = Math.round(width / 2);
-  const centerY = Math.round(height * 0.18); // higher up to avoid ears
-  const radiusX = Math.round(width * 0.35);  // slightly narrower to avoid ears on sides
-  const radiusY = Math.round(height * 0.22); // shorter to stay above ear level
+  const centerY = Math.round(height * 0.15); // high up, just the top/crown
+  const radiusX = Math.round(width * 0.28);  // narrow — leave side hair visible as color reference
+  const radiusY = Math.round(height * 0.18); // short — just the bald area on top
 
   const svgMask = `
     <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
