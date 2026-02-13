@@ -27,8 +27,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
-    timestamp: new Date().toISOString(),
-    version: '2.0' // Añadí esto para que sepamos si se actualizó
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -139,4 +138,39 @@ async function pollPrediction(url) {
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
-  throw new Error('Prediction timed out
+  throw new Error('Prediction timed out after 3 minutes');
+}
+
+// Build optimized hair transplant prompt
+function buildHairPrompt(style, density, hairline) {
+  const densityMap = {
+    low: 'subtle natural hair density improvement',
+    medium: 'moderate natural hair density, full coverage',
+    high: 'thick dense full head of hair, maximum coverage'
+  };
+  const styleMap = {
+    natural: 'naturally distributed hair follicles, organic hair growth pattern',
+    dense: 'dense uniform hair coverage, thick hair',
+    subtle: 'subtle improvement, slightly thicker hair, minimal change'
+  };
+  const hairlineMap = {
+    'age-appropriate': 'age-appropriate natural mature hairline',
+    'youthful': 'youthful lower hairline, full frontal coverage',
+    'mature': 'mature dignified hairline, natural recession maintained'
+  };
+
+  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED`;
+}
+
+function buildNegativePrompt() {
+  return 'cartoon, anime, illustration, painting, drawing, art, sketch, CGI, 3D render, changed face, different person, altered facial features, different skin color, modified eyes, changed nose, different mouth, wig, fake hair, plastic, distorted, deformed, blurry, low quality, watermark, text, logo, different clothing, different background, different angle, different lighting';
+}
+
+// Serve frontend
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
+});
