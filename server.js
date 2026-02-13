@@ -45,7 +45,77 @@ async function getAspectRatio(buffer) {
   }
 }
 
-// Models: Max first (best prompt adherence), then Pro as fallback
+// Step 1: Detect hair color using a vision model
+async function detectHairColor(base64Image) {
+  try {
+    console.log('[HairColor] Detecting hair color...');
+
+    // Sample the sides of the image to get average color
+    // We'll use sharp to extract color info from the hair area
+    const buffer = Buffer.from(base64Image.split(',')[1], 'base64');
+    const metadata = await sharp(buffer).metadata();
+    const w = metadata.width;
+    const h = metadata.height;
+
+    // Sample from left side (where hair usually is on sides)
+    // Top 30% of image, left 20% and right 20%
+    const sampleHeight = Math.round(h * 0.3);
+    const sampleWidth = Math.round(w * 0.15);
+
+    const leftSample = await sharp(buffer)
+      .extract({ left: 0, top: 0, width: sampleWidth, height: sampleHeight })
+      .resize(1, 1)
+      .raw()
+      .toBuffer();
+
+    const rightSample = await sharp(buffer)
+      .extract({ left: w - sampleWidth, top: 0, width: sampleWidth, height: sampleHeight })
+      .resize(1, 1)
+      .raw()
+      .toBuffer();
+
+    // Average the two samples
+    const r = Math.round((leftSample[0] + rightSample[0]) / 2);
+    const g = Math.round((leftSample[1] + rightSample[1]) / 2);
+    const b = Math.round((leftSample[2] + rightSample[2]) / 2);
+
+    // Determine hair color name from RGB
+    const brightness = (r + g + b) / 3;
+    const warmth = r - b; // positive = warm, negative = cool
+
+    let color;
+    if (brightness > 180) {
+      color = warmth > 20 ? 'light blonde' : 'platinum blonde';
+    } else if (brightness > 140) {
+      color = warmth > 30 ? 'golden blonde' : 'light brown';
+    } else if (brightness > 110) {
+      color = warmth > 20 ? 'medium brown' : 'ash brown';
+    } else if (brightness > 80) {
+      color = warmth > 15 ? 'dark brown' : 'dark ash brown';
+    } else if (brightness > 50) {
+      color = warmth > 10 ? 'very dark brown' : 'black';
+    } else {
+      color = 'black';
+    }
+
+    // Check for red/auburn
+    if (r > g * 1.3 && r > b * 1.5 && brightness > 60 && brightness < 160) {
+      color = brightness > 100 ? 'auburn' : 'dark auburn';
+    }
+
+    // Check for gray
+    if (Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && brightness > 100 && brightness < 180) {
+      color = 'gray';
+    }
+
+    console.log(`[HairColor] Detected: ${color} (RGB: ${r},${g},${b} brightness: ${brightness} warmth: ${warmth})`);
+    return color;
+  } catch (e) {
+    console.log(`[HairColor] Detection failed: ${e.message}, using fallback`);
+    return null;
+  }
+}
+
 const MODELS = [
   'black-forest-labs/flux-kontext-max',
   'black-forest-labs/flux-kontext-pro'
@@ -64,24 +134,29 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const style = req.body.style || 'natural';
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
-    const prompt = buildHairPrompt(style, density, hairline);
     const aspectRatio = await getAspectRatio(req.file.buffer);
+
+    // Step 1: Detect hair color from the image
+    const detectedColor = await detectHairColor(base64Image);
+    console.log(`[Generate] Detected hair color: ${detectedColor}`);
+
+    // Step 2: Build prompt with explicit hair color
+    const prompt = buildHairPrompt(style, density, hairline, detectedColor);
     console.log(`[Generate] Aspect ratio: ${aspectRatio}`);
     console.log(`[Generate] Prompt: ${prompt}`);
 
     for (const model of MODELS) {
-      // Try each model up to 2 times
       for (let attempt = 1; attempt <= 2; attempt++) {
         console.log(`[Generate] ${model} attempt ${attempt}...`);
         try {
           const result = await runModel(model, base64Image, prompt, aspectRatio);
           if (result.success) {
             console.log(`[Generate] ✅ Success with ${model}!`);
-            return res.json({ success: true, outputUrl: result.outputUrl, model });
+            return res.json({ success: true, outputUrl: result.outputUrl, model, detectedColor });
           }
-          console.log(`[Generate] ${model} attempt ${attempt} failed: ${result.error}`);
+          console.log(`[Generate] ${model} failed: ${result.error}`);
         } catch (err) {
-          console.log(`[Generate] ${model} attempt ${attempt} error: ${err.message}`);
+          console.log(`[Generate] ${model} error: ${err.message}`);
         }
         if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
       }
@@ -160,16 +235,19 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
-function buildHairPrompt(style, density, hairline) {
+function buildHairPrompt(style, density, hairline, hairColor) {
   const densityMap = {
-    low: 'moderate amount of',
-    medium: 'full head of',
-    high: 'very thick, dense'
+    low: 'moderate',
+    medium: 'full and thick',
+    high: 'very thick and dense'
   };
-
   const density_text = densityMap[density] || densityMap.medium;
 
-  return `Replace the bald/thinning area on top of this person's head with a ${density_text} natural hair. The hair must be the SAME color as the hair they already have on the sides — copy that exact color. Cover the entire top of the head, temples, and hairline fully — no bald spots remaining. Keep absolutely everything else unchanged: same person, same face, same beard, same skin, same clothes, same background. Do not rotate the photo.`;
+  const colorText = hairColor
+    ? `The hair MUST be ${hairColor} colored — this is the exact color of their existing hair. Do NOT use any other color. Do NOT make it darker or lighter.`
+    : `The hair must match the exact color of the person's existing hair on the sides of their head. Do NOT darken it.`;
+
+  return `Give this person ${density_text} hair on top of their head. Fill in all bald and thinning areas completely — top, crown, temples, and front hairline. No bald spots remaining. ${colorText} Do NOT change their beard, facial hair, face, eyes, ears, skin, expression, clothing, or background. Do not rotate or flip the image. The hair should look natural and photorealistic.`;
 }
 
 app.get('*', (req, res) => {
@@ -179,6 +257,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
   console.log(`🎯 Models: Flux Kontext Max > Flux Kontext Pro`);
+  console.log(`🔍 Hair color detection: enabled (via sharp)`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
