@@ -28,7 +28,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '4.0 (Realistic Engine)' // ¡Nueva versión!
+    version: '5.0 - SDXL Professional' 
   });
 });
 
@@ -47,14 +47,13 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
 
-    // Hice el prompt positivo un poco más agresivo
     const prompt = buildHairPrompt(style, density, hairline);
-    // Y el negativo más estricto contra resultados malos
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting PRO - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+    console.log(`[Generate] Starting PRO SDXL - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
-    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
+    // CORRECCIÓN PROFESIONAL: Usamos el alias oficial de SDXL (nunca te dará 404)
+    const createResponse = await fetch('https://api.replicate.com/v1/models/stability-ai/sdxl/predictions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
@@ -62,18 +61,14 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
-        // ¡EL CAMBIO CLAVE! Usamos un modelo de alto fotorrealismo (Realistic Vision v5.1)
-        version: "9936c2001faa2194a261c01381f90e65261879985476014a0a37a334593a05eb",
         input: {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          // Damos más pasos para mayor realismo
+          // 0.35 es el "punto dulce". Modifica el cabello pero no destruye los rasgos faciales.
+          prompt_strength: 0.35, 
           num_inference_steps: 40,
-          // Un poco más de libertad al modelo (menos fuerza a la imagen original)
-          prompt_strength: 0.40, 
-          guidance_scale: 7.5,
-          scheduler: "K_EULER_ANCESTRAL"
+          guidance_scale: 7.5
         }
       })
     });
@@ -148,31 +143,29 @@ async function pollPrediction(url) {
   throw new Error('Prediction timed out after 3 minutes');
 }
 
-// Build optimized hair transplant prompt
+// Prompts reescritos para evitar resultados extraños y collages
 function buildHairPrompt(style, density, hairline) {
   const densityMap = {
-    low: 'natural density improvement',
-    medium: 'full natural density, complete coverage',
-    high: 'very thick dense hair, maximum coverage'
+    low: 'subtle natural hair density',
+    medium: 'full head of hair, medium density',
+    high: 'very thick dense hair'
   };
   const styleMap = {
-    natural: 'organic hair growth pattern, natural look',
-    dense: 'thick uniform coverage, robust hair',
-    subtle: 'slight improvement, fuller look'
+    natural: 'natural organic hair styling',
+    dense: 'thick robust hair styling',
+    subtle: 'neatly groomed hair'
   };
   const hairlineMap = {
     'age-appropriate': 'natural mature hairline',
-    'youthful': 'youthful lower hairline',
-    'mature': 'dignified recessed hairline'
+    'youthful': 'youthful straight hairline',
+    'mature': 'slightly recessed dignified hairline'
   };
 
-  // Prompt reforzado para realismo médico
-  return `photorealistic after photo of successful hair transplant surgery, patient showing ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp details, natural follicle direction, cinematic lighting, highly detailed, sharp focus. The face, skin, eyes, and background remain exactly the same as the original image.`;
+  return `Photorealistic professional portrait of a man. He has ${densityMap[density]}, ${hairlineMap[hairline]}, ${styleMap[style]}. Perfectly matching his natural hair color. The facial features, face shape, eyes, expression, clothing, and background are ABSOLUTELY IDENTICAL to the original image. Highly detailed, 8k resolution, DSLR photography.`;
 }
 
 function buildNegativePrompt() {
-  // Negative prompt reforzado
-  return 'baldness, thinning hair, fake hair, wig, plastic look, unnatural hairline, distorted face, blurry, low quality, cartoon, painting, bad anatomy, extra fingers, deformed, ugly, watermark, text';
+  return 'collage, split screen, before and after, multiple views, text, watermark, different person, changed face, altered facial features, 3d render, cgi, cartoon, painting, drawing, wig, fake hair, deformed, blurry, overexposed';
 }
 
 // Serve frontend
