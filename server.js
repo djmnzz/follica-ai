@@ -58,7 +58,10 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const style = req.body.style || 'natural';
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
+    
+    // Aquí llamamos a nuestro nuevo prompt optimizado
     const prompt = buildHairPrompt(style, density, hairline);
+    
     const aspectRatio = await getAspectRatio(req.file.buffer);
     console.log(`[Generate] Aspect ratio: ${aspectRatio}`);
 
@@ -161,14 +164,18 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
+// ==========================================
+// EL NUEVO PROMPT (SIN BARBAS, SIN CAMBIOS DE CARA)
+// ==========================================
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'more',
-    medium: 'a full thick head of',
-    high: 'very thick abundant'
+    low: 'a subtle, natural amount of',
+    medium: 'a full, thick head of',
+    high: 'very thick, abundant'
   };
 
-  return `Give this person ${densityDesc[density] || densityDesc.medium} hair on top of their head, covering all bald and thinning areas including the temples and front. The new hair color must be the same color as their existing hair — keep the exact same shade, whether it is blonde, light brown, dark brown, red, or gray. Do not change the hair color at all. Keep their beard and facial hair exactly as it is — do not fill it in, do not thicken it, do not change it. Keep everything else the same: face, expression, glasses, ears, skin, clothing, background. Do not rotate the image.`;
+  // Cero palabras prohibidas. Describimos exactamente qué mantener intacto.
+  return `A photorealistic, high-quality portrait of this exact person. Add ${densityDesc[density] || densityDesc.medium} hair strictly to the top of the scalp, forehead, and temples to cover any baldness. The new hair perfectly matches their original natural hair color and texture. The person's jawline, chin, face, skin, expression, and the background must remain absolutely 100% identical to the original input image. Clean shaven areas must remain clean shaven. Highly detailed, 8k, seamless transition.`;
 }
 
 app.get('*', (req, res) => {
@@ -177,7 +184,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🎯 Model: Flux Kontext Pro (with retry)`);
+  console.log(`🎯 Model: Flux Kontext Pro (with retry & optimized prompt)`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
