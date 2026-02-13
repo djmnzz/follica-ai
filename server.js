@@ -22,13 +22,13 @@ const upload = multer({
   }
 });
 
-// Health check para confirmar que la versión subió a Render
+// Health check 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '6.0 - Professional SDXL Build'
+    version: '7.0 - Ultra Pro SDXL Build'
   });
 });
 
@@ -50,9 +50,9 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const prompt = buildHairPrompt(style, density, hairline);
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting PRO SDXL - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+    console.log(`[Generate] Starting PRO SDXL - Style: ${style}, Density: ${density}`);
 
-    // CONFIGURACIÓN PROFESIONAL: Endpoint directo a predicciones con Hash Inmutable
+    // CONFIGURACIÓN PRO: Hash inmutable de SDXL 1.0 (Sin errores 404)
     const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
       headers: {
@@ -61,14 +61,13 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
-        // Hash exacto de SDXL 1.0. Esto JAMÁS dará error 404.
         version: "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
         input: {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          // prompt_strength 0.40 es el equilibrio perfecto para mantener la cara y cambiar el pelo
-          prompt_strength: 0.40, 
+          // 0.35 es el balance PRO: preserva la identidad facial, pero permite regenerar cabello
+          prompt_strength: 0.35, 
           num_inference_steps: 40,
           guidance_scale: 7.5
         }
@@ -94,14 +93,12 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       });
     }
 
-    // Instant success handler
     if (prediction.status === 'succeeded' && prediction.output) {
       const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
       console.log(`[Generate] Instant success!`);
       return res.json({ success: true, outputUrl });
     }
 
-    // Polling handler
     if (prediction.id) {
       console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
       const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
@@ -116,4 +113,68 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       }
     }
 
-    // Fallback
+    return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
+
+  } catch (error) {
+    console.error('[Generate] Server error:', error.message);
+    res.status(500).json({ error: 'Server error', detail: error.message });
+  }
+});
+
+// Función de espera (Polling)
+async function pollPrediction(url) {
+  const maxAttempts = 60;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
+    });
+    const prediction = await response.json();
+    console.log(`[Poll] Status: ${prediction.status} (${attempts * 3}s)`);
+
+    if (['succeeded', 'failed', 'canceled'].includes(prediction.status)) {
+      return prediction;
+    }
+
+    attempts++;
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  throw new Error('Prediction timed out after 3 minutes');
+}
+
+// PROMPTS REDISEÑADOS PARA REALISMO Y RETENCIÓN FACIAL
+function buildHairPrompt(style, density, hairline) {
+  const densityMap = {
+    low: 'subtle natural hair',
+    medium: 'thick healthy hair, full coverage',
+    high: 'very thick dense hair'
+  };
+  const styleMap = {
+    natural: 'natural organic styling',
+    dense: 'thick robust styling',
+    subtle: 'neatly groomed'
+  };
+  const hairlineMap = {
+    'age-appropriate': 'natural mature hairline',
+    'youthful': 'youthful straight hairline',
+    'mature': 'slightly recessed dignified hairline'
+  };
+
+  return `Award-winning portrait photograph of a handsome man with ${densityMap[density]}, ${hairlineMap[hairline]}, ${styleMap[style]}. The facial features, face shape, eyes, expression, skin texture, clothing, and background are ABSOLUTELY IDENTICAL to the original image. Only the hair is added. Highly detailed, 8k resolution, raw photo, DSLR, realistic lighting.`;
+}
+
+function buildNegativePrompt() {
+  return 'collage, split screen, before and after, multiple views, text, watermark, different person, changed face, altered facial features, 3d render, cgi, video game, cartoon, painting, drawing, wig, fake hair, plastic, deformed, blurry, overexposed';
+}
+
+// Serve frontend
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
+  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
+});
