@@ -168,12 +168,12 @@ async function pollPrediction(url) {
 
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'with moderate density',
-    medium: 'with full thick density',
-    high: 'with very thick maximum density'
+    low: 'more',
+    medium: 'a full thick head of',
+    high: 'very thick abundant'
   };
 
-  return `This person has thinning hair or baldness on top of their head. Give them a full head of hair ${densityDesc[density] || densityDesc.medium}. Grow thick natural hair covering their entire scalp — fill the top, the crown, the temples, and the front hairline completely. No bald patches, no thin spots, no receding temples. The hair should be abundant and full. VERY IMPORTANT about the hair color: look at the hair this person currently has on the sides of their head — the new hair on top must be that EXACT SAME color. If their hair is blonde, add blonde hair. If light brown, add light brown. If red, add red. If gray, add gray. Do NOT default to dark brown or black. Match the exact shade from their existing hair. The rest of the photo stays identical: same person, same face, same eyes, same glasses, same beard, same facial hair, same mustache, same ears, same skin tone, same expression, same clothing, same background, same lighting, same angle. Do not rotate or flip the image. The hair must look photorealistic — natural strands, natural volume, the way real hair looks in a real photo.`;
+  return `Give this person ${densityDesc[density] || densityDesc.medium} hair on top of their head, covering all bald and thinning areas including the temples and front. The new hair color must be the same color as their existing hair — keep the exact same shade, whether it is blonde, light brown, dark brown, red, or gray. Do not change the hair color at all. Keep their beard and facial hair exactly as it is — do not fill it in, do not thicken it, do not change it. Keep everything else the same: face, expression, glasses, ears, skin, clothing, background. Do not rotate the image.`;
 }
 
 app.get('*', (req, res) => {
