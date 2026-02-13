@@ -45,100 +45,6 @@ async function getAspectRatio(buffer) {
   }
 }
 
-// Detect hair color by sampling the sides of the head area
-async function detectHairColor(base64Image) {
-  try {
-    const buffer = Buffer.from(base64Image.split(',')[1], 'base64');
-    const metadata = await sharp(buffer).metadata();
-    const w = metadata.width;
-    const h = metadata.height;
-
-    // Sample from the sides of the head: 20-35% from top, far left and far right edges
-    // This is where hair on the sides typically is in a portrait/selfie
-    const topOffset = Math.round(h * 0.2);
-    const sampleH = Math.round(h * 0.15);
-    const sampleW = Math.round(w * 0.1);
-
-    // Left side hair
-    const leftSample = await sharp(buffer)
-      .extract({ left: Math.round(w * 0.05), top: topOffset, width: sampleW, height: sampleH })
-      .resize(1, 1)
-      .raw()
-      .toBuffer();
-
-    // Right side hair
-    const rightSample = await sharp(buffer)
-      .extract({ left: w - sampleW - Math.round(w * 0.05), top: topOffset, width: sampleW, height: sampleH })
-      .resize(1, 1)
-      .raw()
-      .toBuffer();
-
-    // Also sample from slightly lower on sides (ear level) where hair is more visible
-    const midOffset = Math.round(h * 0.3);
-    const leftMid = await sharp(buffer)
-      .extract({ left: Math.round(w * 0.03), top: midOffset, width: sampleW, height: sampleH })
-      .resize(1, 1)
-      .raw()
-      .toBuffer();
-
-    const rightMid = await sharp(buffer)
-      .extract({ left: w - sampleW - Math.round(w * 0.03), top: midOffset, width: sampleW, height: sampleH })
-      .resize(1, 1)
-      .raw()
-      .toBuffer();
-
-    // Average all 4 samples — pick the darkest two (more likely to be hair, not background)
-    const samples = [
-      { r: leftSample[0], g: leftSample[1], b: leftSample[2] },
-      { r: rightSample[0], g: rightSample[1], b: rightSample[2] },
-      { r: leftMid[0], g: leftMid[1], b: leftMid[2] },
-      { r: rightMid[0], g: rightMid[1], b: rightMid[2] }
-    ];
-
-    // Sort by brightness, take the 2 darkest (most likely hair, not background)
-    samples.sort((a, b) => (a.r + a.g + a.b) - (b.r + b.g + b.b));
-    const hairSamples = samples.slice(0, 2);
-
-    const r = Math.round(hairSamples.reduce((s, p) => s + p.r, 0) / 2);
-    const g = Math.round(hairSamples.reduce((s, p) => s + p.g, 0) / 2);
-    const b2 = Math.round(hairSamples.reduce((s, p) => s + p.b, 0) / 2);
-
-    const brightness = (r + g + b2) / 3;
-    const warmth = r - b2;
-
-    let color;
-    if (brightness > 170) {
-      color = 'light blonde';
-    } else if (brightness > 140) {
-      color = warmth > 25 ? 'golden blonde' : 'dirty blonde';
-    } else if (brightness > 115) {
-      color = warmth > 20 ? 'light brown' : 'light ash brown';
-    } else if (brightness > 90) {
-      color = warmth > 15 ? 'medium brown' : 'medium ash brown';
-    } else if (brightness > 65) {
-      color = warmth > 10 ? 'dark brown' : 'dark brown';
-    } else {
-      color = 'very dark brown';
-    }
-
-    // Check for red/auburn
-    if (r > g * 1.3 && r > b2 * 1.4 && brightness > 55 && brightness < 150) {
-      color = brightness > 100 ? 'auburn' : 'dark auburn';
-    }
-
-    // Check for gray
-    if (Math.abs(r - g) < 12 && Math.abs(g - b2) < 12 && brightness > 90 && brightness < 170) {
-      color = brightness > 130 ? 'light gray' : 'salt and pepper gray';
-    }
-
-    console.log(`[HairColor] Detected: ${color} (RGB avg: ${r},${g},${b2} brightness: ${Math.round(brightness)} warmth: ${Math.round(warmth)})`);
-    return color;
-  } catch (e) {
-    console.log(`[HairColor] Detection failed: ${e.message}`);
-    return null;
-  }
-}
-
 const MODELS = [
   'black-forest-labs/flux-kontext-max',
   'black-forest-labs/flux-kontext-pro'
@@ -157,10 +63,12 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const aspectRatio = await getAspectRatio(req.file.buffer);
 
-    const detectedColor = await detectHairColor(base64Image);
-    const prompt = buildHairPrompt(density, detectedColor);
+    // Ultra-minimal prompt. Flux Kontext preserves identity best when
+    // the prompt is SHORT and only describes the change.
+    const prompt = buildHairPrompt(density);
 
-    console.log(`[Generate] Color: ${detectedColor}, Aspect: ${aspectRatio}`);
+    console.log(`[Generate] Aspect: ${aspectRatio}, Density: ${density}`);
+    console.log(`[Generate] Prompt: ${prompt}`);
 
     for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -169,7 +77,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
           const result = await runModel(model, base64Image, prompt, aspectRatio);
           if (result.success) {
             console.log(`[Generate] ✅ Success with ${model}!`);
-            return res.json({ success: true, outputUrl: result.outputUrl, model, detectedColor });
+            return res.json({ success: true, outputUrl: result.outputUrl, model });
           }
           console.log(`[Generate] ${model} failed: ${result.error}`);
         } catch (err) {
@@ -250,19 +158,17 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
-function buildHairPrompt(density, hairColor) {
+function buildHairPrompt(density) {
   const densityMap = {
-    low: 'moderate',
-    medium: 'full and thick',
-    high: 'very thick and dense'
+    low: 'a moderate amount of',
+    medium: 'a full head of',
+    high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
 
-  const colorInstruction = hairColor
-    ? `The new hair color MUST be ${hairColor}. This is non-negotiable — do NOT use black hair, do NOT use dark brown hair unless that is the specified color.`
-    : `Match the hair color to whatever color the person's existing hair is.`;
-
-  return `Add ${d} hair on top of this person's head covering all bald and thinning areas — top, crown, temples, and front. No bald spots remaining. ${colorInstruction} IMPORTANT: Do NOT change the beard AT ALL. The beard must stay EXACTLY as it is — same length, same thickness, same patchiness, same color. Do not fill in the beard, do not make it thicker, do not darken it. Leave ALL facial hair completely untouched. Also keep same face, eyes, ears, skin, glasses, clothing, background. Do not rotate the image.`;
+  // ULTRA SHORT prompt. Flux Kontext works best with minimal instructions.
+  // Long prompts confuse it and cause it to change things we don't want changed.
+  return `Make this person have ${d} hair on top. Same hair color, same beard, same everything else.`;
 }
 
 app.get('*', (req, res) => {
@@ -272,7 +178,6 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
   console.log(`🎯 Models: Flux Kontext Max > Flux Kontext Pro`);
-  console.log(`🔍 Hair color detection: enabled`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
