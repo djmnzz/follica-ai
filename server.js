@@ -24,14 +24,26 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
-    models: ['google/nano-banana-pro', 'google/nano-banana'],
     timestamp: new Date().toISOString()
   });
 });
 
 const MODELS = [
-  'google/nano-banana-pro',
-  'google/nano-banana'
+  {
+    id: 'black-forest-labs/flux-kontext-pro',
+    imageField: 'input_image',
+    extraParams: {}
+  },
+  {
+    id: 'google/nano-banana-pro',
+    imageField: 'image',
+    extraParams: {}
+  },
+  {
+    id: 'google/nano-banana',
+    imageField: 'image',
+    extraParams: {}
+  }
 ];
 
 app.post('/api/generate', upload.single('image'), async (req, res) => {
@@ -50,17 +62,17 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const prompt = buildHairPrompt(style, density, hairline);
 
     for (const model of MODELS) {
-      console.log(`[Generate] Trying ${model}...`);
+      console.log(`[Generate] Trying ${model.id}...`);
 
       try {
         const result = await runModel(model, base64Image, prompt);
         if (result.success) {
-          console.log(`[Generate] Success with ${model}!`);
-          return res.json({ success: true, outputUrl: result.outputUrl, model });
+          console.log(`[Generate] Success with ${model.id}!`);
+          return res.json({ success: true, outputUrl: result.outputUrl, model: model.id });
         }
-        console.log(`[Generate] ${model} failed: ${result.error} — trying next...`);
+        console.log(`[Generate] ${model.id} failed: ${result.error}`);
       } catch (err) {
-        console.log(`[Generate] ${model} error: ${err.message} — trying next...`);
+        console.log(`[Generate] ${model.id} error: ${err.message}`);
       }
     }
 
@@ -75,26 +87,27 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 });
 
 async function runModel(model, image, prompt) {
-  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
+  const inputPayload = {
+    prompt: prompt,
+    [model.imageField]: image,
+    ...model.extraParams
+  };
+
+  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model.id}/predictions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
       'Prefer': 'wait=60'
     },
-    body: JSON.stringify({
-      input: {
-        prompt: prompt,
-        image: image
-      }
-    })
+    body: JSON.stringify({ input: inputPayload })
   });
 
   const prediction = await createResponse.json();
-  console.log(`[${model}] Status: ${createResponse.status}, prediction: ${prediction.status || 'N/A'}`);
+  console.log(`[${model.id}] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
 
   if (!createResponse.ok) {
-    return { success: false, error: prediction.detail || JSON.stringify(prediction) };
+    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
   }
 
   if (prediction.status === 'succeeded' && prediction.output) {
@@ -144,17 +157,17 @@ async function pollPrediction(url) {
 
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'slightly more hair',
-    medium: 'noticeably more hair with good coverage',
-    high: 'a full thick head of hair'
+    low: 'slightly thicker hair',
+    medium: 'noticeably fuller hair with good coverage',
+    high: 'a full thick head of hair with maximum density'
   };
   const hairlineDesc = {
     'age-appropriate': '',
-    'youthful': 'with a lower, more youthful hairline',
-    'mature': 'maintaining a mature hairline'
+    'youthful': ' with a lower, more youthful hairline',
+    'mature': ' keeping the mature hairline shape'
   };
 
-  return `This is a photo of a person with hair loss. Make ONLY ONE change: add ${densityDesc[density] || densityDesc.medium} on top of their head ${hairlineDesc[hairline] || ''}. The hair must match their existing hair color and texture exactly. DO NOT change ANYTHING else. The person's face, expression, skin, eyes, nose, mouth, jaw, ears, neck, body, clothing, and background must remain PIXEL-PERFECT IDENTICAL to the input photo. Do not change the person's age, weight, or any facial features. Do not change the camera angle or lighting. Only add hair to the bald/thinning areas of the scalp.`;
+  return `Keep this exact same person, same face, same expression, same skin, same clothing, same background, same lighting, same camera angle. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas of their scalp${hairlineDesc[hairline] || ''}. The added hair must match their existing hair color and texture perfectly. Everything else must be identical to the original photo.`;
 }
 
 app.get('*', (req, res) => {
@@ -163,7 +176,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🍌 Models: Nano Banana Pro → Nano Banana (fallback)`);
+  console.log(`🎯 Models: Flux Kontext Pro > Nano Banana Pro > Nano Banana`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
