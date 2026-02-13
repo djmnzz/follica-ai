@@ -22,13 +22,13 @@ const upload = multer({
   }
 });
 
-// Health check 
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '8.0 - NSFW Bypass Pro'
+    version: '9.0 - Full Hairline Realism'
   });
 });
 
@@ -50,7 +50,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const prompt = buildHairPrompt(style, density, hairline);
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting PRO SDXL - Style: ${style}, Density: ${density}`);
+    console.log(`[Generate] Starting Realism PRO - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
     const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
@@ -65,11 +65,10 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
           image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          // Lo subimos ligeramente a 0.45 para evitar el ruido que dispara el filtro NSFW
-          prompt_strength: 0.45, 
-          num_inference_steps: 30,
-          guidance_scale: 7.5,
-          // ¡EL TRUCO DE MAGIA! Desactivamos el filtro paranoico de Replicate
+          // Aumentado a 0.55 para permitir cambios más notables en el cabello
+          prompt_strength: 0.55,
+          num_inference_steps: 35,
+          guidance_scale: 8,
           disable_safety_checker: true
         }
       })
@@ -144,30 +143,30 @@ async function pollPrediction(url) {
   throw new Error('Prediction timed out after 3 minutes');
 }
 
-// PROMPTS LIMPIOS DE PALABRAS PELIGROSAS
+// PROMPTS REESCRITOS PARA REALISMO Y SIN ENTRADAS
 function buildHairPrompt(style, density, hairline) {
   const densityMap = {
-    low: 'subtle hair',
-    medium: 'full head of hair, medium density',
-    high: 'very thick dense hair'
+    low: 'natural looking full hair, moderate density',
+    medium: 'full head of abundant hair, medium-high density',
+    high: 'very thick, dense, full head of hair'
   };
   const styleMap = {
-    natural: 'natural styling',
-    dense: 'thick robust styling',
-    subtle: 'neatly groomed'
+    natural: 'naturally styled with volume',
+    dense: 'thick, robustly styled hair',
+    subtle: 'neatly groomed full hair'
   };
   const hairlineMap = {
-    'age-appropriate': 'natural mature hairline',
-    'youthful': 'youthful straight hairline',
-    'mature': 'slightly recessed dignified hairline'
+    // Todas las opciones ahora fuerzan una línea de cabello completa sin entradas
+    'age-appropriate': 'a straight, full, youthful hairline with no recession',
+    'youthful': 'a perfectly straight, low, youthful hairline',
+    'mature': 'a full, strong hairline with absolutely no receding spots'
   };
 
-  // Removidas palabras como "skin", "raw", "handsome" para no alterar al filtro
-  return `Professional portrait photo of a man wearing clothes. He has ${densityMap[density]}, ${hairlineMap[hairline]}, ${styleMap[style]}. Natural hair color. Face, clothing, and background are identical to the original image. High quality, detailed photograph.`;
+  return `Professional portrait photograph of the man. He now has a complete and full head of hair with ${densityMap[density]} and a ${hairlineMap[hairline]}, styled in a ${styleMap[style]}. The new hair looks completely realistic, healthy, and covers all previously bald or receding areas. The man's face, expression, skin, clothing, and background remain identical to the original photo. High resolution, detailed textures.`;
 }
 
 function buildNegativePrompt() {
-  return 'nsfw, nude, naked, bare skin, collage, split screen, before and after, multiple views, text, watermark, different person, changed face, altered facial features, 3d render, cgi, video game, cartoon, painting, drawing, wig, fake hair, plastic, deformed, blurry, overexposed';
+  return 'nsfw, nude, bald, thinning hair, receding hairline, forehead exposure, collage, split screen, text, watermark, different person, changed face, distorted features, low quality, blurry, wig, fake looking hair';
 }
 
 // Serve frontend
