@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
+const sharp = require('sharp');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -46,6 +47,22 @@ const MODELS = [
   }
 ];
 
+async function getAspectRatio(buffer) {
+  try {
+    const metadata = await sharp(buffer).metadata();
+    const ratio = metadata.width / metadata.height;
+    if (ratio > 1.6) return '16:9';
+    if (ratio > 1.3) return '3:2';
+    if (ratio > 1.1) return '4:3';
+    if (ratio > 0.9) return '1:1';
+    if (ratio > 0.7) return '3:4';
+    if (ratio > 0.55) return '2:3';
+    return '9:16';
+  } catch (e) {
+    return '1:1';
+  }
+}
+
 app.post('/api/generate', upload.single('image'), async (req, res) => {
   try {
     if (!REPLICATE_API_TOKEN) {
@@ -60,12 +77,13 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
     const prompt = buildHairPrompt(style, density, hairline);
+    const aspectRatio = await getAspectRatio(req.file.buffer);
+    console.log(`[Generate] Aspect ratio: ${aspectRatio}`);
 
     for (const model of MODELS) {
       console.log(`[Generate] Trying ${model.id}...`);
-
       try {
-        const result = await runModel(model, base64Image, prompt);
+        const result = await runModel(model, base64Image, prompt, aspectRatio);
         if (result.success) {
           console.log(`[Generate] Success with ${model.id}!`);
           return res.json({ success: true, outputUrl: result.outputUrl, model: model.id });
@@ -79,17 +97,17 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     return res.status(500).json({
       error: 'All models are currently unavailable. Please try again in a few minutes.'
     });
-
   } catch (error) {
     console.error('[Generate] Server error:', error.message);
     res.status(500).json({ error: 'Server error', detail: error.message });
   }
 });
 
-async function runModel(model, image, prompt) {
+async function runModel(model, image, prompt, aspectRatio) {
   const inputPayload = {
     prompt: prompt,
     [model.imageField]: image,
+    aspect_ratio: aspectRatio,
     ...model.extraParams
   };
 
@@ -122,7 +140,6 @@ async function runModel(model, image, prompt) {
   if (prediction.id) {
     const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
     const result = await pollPrediction(pollUrl);
-
     if (result.status === 'succeeded' && result.output) {
       const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
       return { success: true, outputUrl };
@@ -136,30 +153,24 @@ async function runModel(model, image, prompt) {
 async function pollPrediction(url) {
   const maxAttempts = 40;
   let attempts = 0;
-
   while (attempts < maxAttempts) {
     const response = await fetch(url, {
       headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
     });
     const data = await response.json();
     console.log(`[Poll] ${data.status} (${attempts * 3}s)`);
-
-    if (['succeeded', 'failed', 'canceled'].includes(data.status)) {
-      return data;
-    }
-
+    if (['succeeded', 'failed', 'canceled'].includes(data.status)) return data;
     attempts++;
     await new Promise(r => setTimeout(r, 3000));
   }
-
   return { status: 'failed', error: 'Timed out' };
 }
 
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
     low: 'slightly thicker hair',
-    medium: 'noticeably fuller hair with good coverage',
-    high: 'a full thick head of hair with maximum density'
+    medium: 'noticeably fuller hair with good natural coverage',
+    high: 'a full thick head of hair with maximum natural density'
   };
   const hairlineDesc = {
     'age-appropriate': '',
@@ -167,7 +178,7 @@ function buildHairPrompt(style, density, hairline) {
     'mature': ' keeping the mature hairline shape'
   };
 
-  return `Keep this exact same person, same face, same expression, same skin, same clothing, same background, same lighting, same camera angle. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas of their scalp${hairlineDesc[hairline] || ''}. CRITICAL: the new hair must be the EXACT SAME COLOR, tone, and texture as the person's existing hair — match their current hair color precisely, do not darken it, lighten it, or change it in any way. If they have brown hair, add brown hair. If they have black hair, add black hair. If they have gray hair, add gray hair. Everything else must be identical to the original photo.`;
+  return `Keep this exact same person, same face, same expression, same skin, same ears, same beard, same facial hair, same clothing, same background, same lighting, same camera angle, same image orientation. The ONLY change: give them ${densityDesc[density] || densityDesc.medium} on the balding/thinning areas on TOP of their head/scalp${hairlineDesc[hairline] || ''}. CRITICAL RULES: 1) The new hair must be the EXACT SAME COLOR, tone, shade, and texture as the person's existing hair — match their current hair color precisely, do not darken it, lighten it, or change it in any way. 2) Do NOT modify the ears, beard, mustache, facial hair, sideburns, eyebrows, forehead shape, face shape, jawline, or any facial feature — all must remain completely untouched and identical to the original. 3) ONLY add hair to the TOP of the head where there is balding or thinning — do not touch anything below the forehead. 4) The hair must look like real natural human hair with natural volume, natural strands, slight imperfections, and realistic scalp visibility — not a wig, not artificial, as if photographed after a real hair transplant. 5) Keep the exact same photo orientation, do not rotate or flip the image.`;
 }
 
 app.get('*', (req, res) => {
