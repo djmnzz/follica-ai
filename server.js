@@ -29,33 +29,46 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Normalize image: fix EXIF rotation and get aspect ratio
-async function normalizeImage(buffer, mimetype) {
-  // sharp.rotate() with no args auto-rotates based on EXIF orientation
-  const normalized = await sharp(buffer)
-    .rotate()
-    .jpeg({ quality: 92 })
-    .toBuffer();
-
+// Fix EXIF rotation and return normalized buffer + metadata
+async function normalizeImage(buffer) {
+  const normalized = await sharp(buffer).rotate().jpeg({ quality: 92 }).toBuffer();
   const metadata = await sharp(normalized).metadata();
-  const ratio = metadata.width / metadata.height;
-
-  let aspectRatio;
-  if (ratio > 1.6) aspectRatio = '16:9';
-  else if (ratio > 1.3) aspectRatio = '3:2';
-  else if (ratio > 1.1) aspectRatio = '4:3';
-  else if (ratio > 0.9) aspectRatio = '1:1';
-  else if (ratio > 0.7) aspectRatio = '3:4';
-  else if (ratio > 0.55) aspectRatio = '2:3';
-  else aspectRatio = '9:16';
-
-  const base64 = `data:image/jpeg;base64,${normalized.toString('base64')}`;
-
-  console.log(`[Normalize] ${metadata.width}x${metadata.height} ratio=${ratio.toFixed(2)} → ${aspectRatio}`);
-  return { base64, aspectRatio };
+  return { buffer: normalized, width: metadata.width, height: metadata.height };
 }
 
-const MODELS = [
+// Generate a mask image: white on top (area to inpaint = hair), black on bottom (preserve)
+// The mask covers roughly the top 45% of the image with a soft oval shape
+// to target the scalp/hair area while leaving face, ears, beard untouched
+async function generateHairMask(width, height) {
+  // Create an SVG mask with an ellipse covering the top of the head
+  // The ellipse is wide and positioned in the upper portion
+  const centerX = Math.round(width / 2);
+  const centerY = Math.round(height * 0.22); // center of ellipse near top
+  const radiusX = Math.round(width * 0.38);  // wide enough to cover temples
+  const radiusY = Math.round(height * 0.25); // tall enough to cover crown
+
+  const svgMask = `
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="black"/>
+      <ellipse cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" fill="white"/>
+    </svg>
+  `;
+
+  const maskBuffer = await sharp(Buffer.from(svgMask))
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  return maskBuffer;
+}
+
+// Models to try: flux-fill-pro first (best inpainting), then flux-fill-dev as fallback
+const FILL_MODELS = [
+  'black-forest-labs/flux-fill-pro',
+  'black-forest-labs/flux-fill-dev'
+];
+
+// Fallback: flux-kontext if fill models fail
+const KONTEXT_MODELS = [
   'black-forest-labs/flux-kontext-max',
   'black-forest-labs/flux-kontext-pro'
 ];
@@ -71,18 +84,25 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 
     const density = req.body.density || 'medium';
 
-    // Normalize: fix EXIF rotation from mobile photos
-    const { base64, aspectRatio } = await normalizeImage(req.file.buffer, req.file.mimetype);
+    // Step 1: Normalize image (fix EXIF rotation)
+    const { buffer: imgBuffer, width, height } = await normalizeImage(req.file.buffer);
+    const base64Image = `data:image/jpeg;base64,${imgBuffer.toString('base64')}`;
 
-    const prompt = buildHairPrompt(density);
-    console.log(`[Generate] Aspect: ${aspectRatio}, Density: ${density}`);
-    console.log(`[Generate] Prompt: ${prompt}`);
+    // Step 2: Generate mask (white = area to fill with hair)
+    const maskBuffer = await generateHairMask(width, height);
+    const base64Mask = `data:image/jpeg;base64,${maskBuffer.toString('base64')}`;
 
-    for (const model of MODELS) {
+    console.log(`[Generate] Image: ${width}x${height}, Density: ${density}`);
+
+    // Step 3: Try flux-fill models (with mask - guarantees face/beard/ears untouched)
+    const fillPrompt = buildFillPrompt(density);
+    console.log(`[Generate] Fill prompt: ${fillPrompt}`);
+
+    for (const model of FILL_MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
         console.log(`[Generate] ${model} attempt ${attempt}...`);
         try {
-          const result = await runModel(model, base64, prompt, aspectRatio);
+          const result = await runFillModel(model, base64Image, base64Mask, fillPrompt);
           if (result.success) {
             console.log(`[Generate] ✅ Success with ${model}!`);
             return res.json({ success: true, outputUrl: result.outputUrl, model });
@@ -95,37 +115,67 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       }
     }
 
-    return res.status(500).json({ error: 'Model busy. Try again.' });
+    // Step 4: Fallback to kontext (no mask, but better than nothing)
+    console.log('[Generate] Fill models failed, trying Kontext fallback...');
+    const kontextPrompt = buildKontextPrompt(density);
+    const ratio = width / height;
+    let aspectRatio = '1:1';
+    if (ratio > 1.6) aspectRatio = '16:9';
+    else if (ratio > 1.3) aspectRatio = '3:2';
+    else if (ratio > 1.1) aspectRatio = '4:3';
+    else if (ratio > 0.9) aspectRatio = '1:1';
+    else if (ratio > 0.7) aspectRatio = '3:4';
+    else if (ratio > 0.55) aspectRatio = '2:3';
+    else aspectRatio = '9:16';
+
+    for (const model of KONTEXT_MODELS) {
+      try {
+        const result = await runKontextModel(model, base64Image, kontextPrompt, aspectRatio);
+        if (result.success) {
+          console.log(`[Generate] ✅ Fallback success with ${model}!`);
+          return res.json({ success: true, outputUrl: result.outputUrl, model });
+        }
+      } catch (err) {
+        console.log(`[Generate] ${model} fallback error: ${err.message}`);
+      }
+    }
+
+    return res.status(500).json({ error: 'All models busy. Please try again.' });
   } catch (error) {
     console.error('[Generate] Server error:', error.message);
     res.status(500).json({ error: 'Server error', detail: error.message });
   }
 });
 
-async function runModel(model, image, prompt, aspectRatio) {
+async function runFillModel(model, image, mask, prompt) {
+  const input = {
+    image: image,
+    mask: mask,
+    prompt: prompt,
+    output_quality: 95
+  };
+
+  // flux-fill-dev uses different params than pro
+  if (model.includes('dev')) {
+    input.guidance = 30;
+    input.num_inference_steps = 30;
+  }
+
   const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
-      'Prefer': 'wait=60'
+      'Prefer': 'wait=90'
     },
-    body: JSON.stringify({
-      input: {
-        prompt: prompt,
-        input_image: image,
-        aspect_ratio: aspectRatio,
-        safety_tolerance: 5,
-        output_quality: 95
-      }
-    })
+    body: JSON.stringify({ input })
   });
 
   const prediction = await createResponse.json();
   console.log(`[${model}] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
 
   if (!createResponse.ok) {
-    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
+    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 300) };
   }
 
   if (prediction.status === 'succeeded' && prediction.output) {
@@ -150,6 +200,48 @@ async function runModel(model, image, prompt, aspectRatio) {
   return { success: false, error: 'Unexpected response' };
 }
 
+async function runKontextModel(model, image, prompt, aspectRatio) {
+  const createResponse = await fetch(`https://api.replicate.com/v1/models/${model}/predictions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'wait=60'
+    },
+    body: JSON.stringify({
+      input: {
+        prompt: prompt,
+        input_image: image,
+        aspect_ratio: aspectRatio,
+        safety_tolerance: 5,
+        output_quality: 95
+      }
+    })
+  });
+
+  const prediction = await createResponse.json();
+  if (!createResponse.ok) {
+    return { success: false, error: prediction.detail || 'API error' };
+  }
+
+  if (prediction.status === 'succeeded' && prediction.output) {
+    const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    return { success: true, outputUrl };
+  }
+
+  if (prediction.id) {
+    const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
+    const result = await pollPrediction(pollUrl);
+    if (result.status === 'succeeded' && result.output) {
+      const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+      return { success: true, outputUrl };
+    }
+    return { success: false, error: result.error || 'Failed' };
+  }
+
+  return { success: false, error: 'Unexpected' };
+}
+
 async function pollPrediction(url) {
   const maxAttempts = 40;
   let attempts = 0;
@@ -166,14 +258,24 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
-function buildHairPrompt(density) {
+function buildFillPrompt(density) {
+  const densityMap = {
+    low: 'natural, moderate',
+    medium: 'full, thick',
+    high: 'very thick, dense'
+  };
+  const d = densityMap[density] || densityMap.medium;
+  // For inpainting, describe ONLY what should fill the masked area
+  return `${d} natural men's hair, laying flat and neat, not sticking up. The hair color must be the same color as the hair visible on the sides of the head — do not default to black or dark brown. Natural realistic hairline with full coverage at the temples. Photorealistic.`;
+}
+
+function buildKontextPrompt(density) {
   const densityMap = {
     low: 'a natural amount of',
     medium: 'a full head of',
     high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
-
   return `Make this person have ${d} natural hair covering their entire head including the temples and hairline — no receding hairline, no bald spots, full coverage from forehead to crown. The hair should lay flat and neat, not sticking up, like a normal short-to-medium men's hairstyle. Same hair color, same beard, same everything else. If ears are not visible in the photo, do NOT add or reveal ears — keep them hidden.`;
 }
 
@@ -183,8 +285,10 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🎯 Models: Flux Kontext Max > Flux Kontext Pro`);
+  console.log(`🎯 Primary: Flux Fill Pro/Dev (masked inpainting)`);
+  console.log(`🔄 Fallback: Flux Kontext Max/Pro`);
   console.log(`📸 EXIF rotation fix: enabled`);
+  console.log(`🎭 Auto-mask: top-of-head ellipse`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
