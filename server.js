@@ -28,7 +28,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
     timestamp: new Date().toISOString(),
-    version: '3.0' // Versión actualizada para confirmar el deploy
+    version: '4.0 (Realistic Engine)' // ¡Nueva versión!
   });
 });
 
@@ -47,12 +47,13 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
 
+    // Hice el prompt positivo un poco más agresivo
     const prompt = buildHairPrompt(style, density, hairline);
+    // Y el negativo más estricto contra resultados malos
     const negativePrompt = buildNegativePrompt();
 
-    console.log(`[Generate] Starting - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
+    console.log(`[Generate] Starting PRO - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
-    // CORRECCIÓN DEFINITIVA: Usamos el endpoint general y el hash del modelo exacto
     const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
       headers: {
@@ -61,15 +62,17 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
-        // Este es el ID exacto del modelo en Replicate, garantizado que no da 404
-        version: "ac732df83cea7fff18b8472768c88ad041fa750ff7682a21affe81863cbe77e4",
+        // ¡EL CAMBIO CLAVE! Usamos un modelo de alto fotorrealismo (Realistic Vision v5.1)
+        version: "9936c2001faa2194a261c01381f90e65261879985476014a0a37a334593a05eb",
         input: {
-          image: base64Image, // Con esta versión exacta, el parámetro debe llamarse 'image'
+          image: base64Image,
           prompt: prompt,
           negative_prompt: negativePrompt,
-          num_inference_steps: 30,
+          // Damos más pasos para mayor realismo
+          num_inference_steps: 40,
+          // Un poco más de libertad al modelo (menos fuerza a la imagen original)
+          prompt_strength: 0.40, 
           guidance_scale: 7.5,
-          prompt_strength: 0.45,
           scheduler: "K_EULER_ANCESTRAL"
         }
       })
@@ -94,14 +97,12 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       });
     }
 
-    // If using Prefer: wait, the response might already be complete
     if (prediction.status === 'succeeded' && prediction.output) {
       const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
       console.log(`[Generate] Instant success!`);
       return res.json({ success: true, outputUrl });
     }
 
-    // Otherwise poll for result
     if (prediction.id) {
       console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
       const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
@@ -116,7 +117,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       }
     }
 
-    // Fallback
     return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
 
   } catch (error) {
@@ -151,26 +151,28 @@ async function pollPrediction(url) {
 // Build optimized hair transplant prompt
 function buildHairPrompt(style, density, hairline) {
   const densityMap = {
-    low: 'subtle natural hair density improvement',
-    medium: 'moderate natural hair density, full coverage',
-    high: 'thick dense full head of hair, maximum coverage'
+    low: 'natural density improvement',
+    medium: 'full natural density, complete coverage',
+    high: 'very thick dense hair, maximum coverage'
   };
   const styleMap = {
-    natural: 'naturally distributed hair follicles, organic hair growth pattern',
-    dense: 'dense uniform hair coverage, thick hair',
-    subtle: 'subtle improvement, slightly thicker hair, minimal change'
+    natural: 'organic hair growth pattern, natural look',
+    dense: 'thick uniform coverage, robust hair',
+    subtle: 'slight improvement, fuller look'
   };
   const hairlineMap = {
-    'age-appropriate': 'age-appropriate natural mature hairline',
-    'youthful': 'youthful lower hairline, full frontal coverage',
-    'mature': 'mature dignified hairline, natural recession maintained'
+    'age-appropriate': 'natural mature hairline',
+    'youthful': 'youthful lower hairline',
+    'mature': 'dignified recessed hairline'
   };
 
-  return `professional medical hair transplant result photograph, ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp visibility, natural hair direction and flow, photorealistic, same lighting and angle as original, ONLY hair and scalp area modified, face skin eyes nose mouth ears clothing background COMPLETELY UNCHANGED`;
+  // Prompt reforzado para realismo médico
+  return `photorealistic after photo of successful hair transplant surgery, patient showing ${styleMap[style] || styleMap.natural}, ${densityMap[density] || densityMap.medium}, ${hairlineMap[hairline] || hairlineMap['age-appropriate']}, perfectly matching original hair color and texture, realistic scalp details, natural follicle direction, cinematic lighting, highly detailed, sharp focus. The face, skin, eyes, and background remain exactly the same as the original image.`;
 }
 
 function buildNegativePrompt() {
-  return 'cartoon, anime, illustration, painting, drawing, art, sketch, CGI, 3D render, changed face, different person, altered facial features, different skin color, modified eyes, changed nose, different mouth, wig, fake hair, plastic, distorted, deformed, blurry, low quality, watermark, text, logo, different clothing, different background, different angle, different lighting';
+  // Negative prompt reforzado
+  return 'baldness, thinning hair, fake hair, wig, plastic look, unnatural hairline, distorted face, blurry, low quality, cartoon, painting, bad anatomy, extra fingers, deformed, ugly, watermark, text';
 }
 
 // Serve frontend
@@ -180,6 +182,4 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
