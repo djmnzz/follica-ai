@@ -29,17 +29,15 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Función auxiliar para obtener el aspect ratio (útil para algunos modelos)
 async function getAspectRatio(buffer) {
   try {
     const metadata = await sharp(buffer).metadata();
     const ratio = metadata.width / metadata.height;
-    if (ratio > 1.6) return '16:9';
-    if (ratio > 1.3) return '3:2';
-    if (ratio > 1.1) return '4:3';
-    if (ratio > 0.9) return '1:1';
-    if (ratio > 0.7) return '3:4';
-    if (ratio > 0.55) return '2:3';
-    return '9:16';
+    // Simplificamos para SDXL
+    if (ratio > 1.1) return '16:9';
+    if (ratio < 0.9) return '9:16';
+    return '1:1';
   } catch (e) {
     return '1:1';
   }
@@ -59,39 +57,31 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
     const hairline = req.body.hairline || 'age-appropriate';
     
-    // Aquí llamamos a nuestro nuevo prompt optimizado
     const prompt = buildHairPrompt(style, density, hairline);
-    
-    const aspectRatio = await getAspectRatio(req.file.buffer);
-    console.log(`[Generate] Aspect ratio: ${aspectRatio}`);
+    const negativePrompt = buildNegativePrompt();
 
-    // Try Flux Kontext Pro up to 3 times
+    // Intentamos hasta 3 veces con el nuevo modelo
     const maxRetries = 3;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`[Generate] Attempt ${attempt}/${maxRetries} with Flux Kontext Pro...`);
+      console.log(`[Generate] Attempt ${attempt}/${maxRetries} with SDXL Realism...`);
 
       try {
-        const result = await runFluxKontext(base64Image, prompt, aspectRatio);
+        // Llamamos a la nueva función para SDXL
+        const result = await runSDXLRealism(base64Image, prompt, negativePrompt);
         if (result.success) {
           console.log(`[Generate] ✅ Success on attempt ${attempt}!`);
-          return res.json({ success: true, outputUrl: result.outputUrl, model: 'flux-kontext-pro' });
+          return res.json({ success: true, outputUrl: result.outputUrl, model: 'sdxl-realism' });
         }
         console.log(`[Generate] Attempt ${attempt} failed: ${result.error}`);
-
-        // Wait 2 seconds before retry
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, 2000));
-        }
+        if (attempt < maxRetries) await new Promise(r => setTimeout(r, 2000));
       } catch (err) {
         console.log(`[Generate] Attempt ${attempt} error: ${err.message}`);
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, 2000));
-        }
+        if (attempt < maxRetries) await new Promise(r => setTimeout(r, 2000));
       }
     }
 
     return res.status(500).json({
-      error: 'The AI model is currently busy. Please try again in a moment.'
+      error: 'The AI model is currently busy or failed. Please try again.'
     });
 
   } catch (error) {
@@ -100,56 +90,58 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
   }
 });
 
-async function runFluxKontext(image, prompt, aspectRatio) {
-  const createResponse = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions', {
+// NUEVA FUNCIÓN: Usa SDXL con control de fuerza para no cambiar la cara
+async function runSDXLRealism(image, prompt, negativePrompt) {
+  // Usamos una versión específica y estable de SDXL
+  const version = "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b";
+  
+  const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
-      'Prefer': 'wait=60'
+      'Prefer': 'wait'
     },
     body: JSON.stringify({
+      version: version,
       input: {
+        image: image, // La imagen original es la base
         prompt: prompt,
-        input_image: image,
-        aspect_ratio: aspectRatio,
-        safety_tolerance: 5,
-        output_quality: 90
+        negative_prompt: negativePrompt,
+        // ¡ESTO ES CLAVE! Un valor bajo (0.3 - 0.4) mantiene la cara original.
+        // Un valor alto (0.8) la cambiaría por completo. Probamos con 0.35.
+        prompt_strength: 0.35, 
+        num_inference_steps: 30,
+        guidance_scale: 7.5,
+        scheduler: "K_EULER_ANCESTRAL"
       }
     })
   });
 
   const prediction = await createResponse.json();
-  console.log(`[Flux] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
+  console.log(`[SDXL] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
 
   if (!createResponse.ok) {
     return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
   }
 
   if (prediction.status === 'succeeded' && prediction.output) {
+    // SDXL devuelve un array, tomamos la primera imagen
     const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
     return { success: true, outputUrl };
   }
 
-  if (prediction.status === 'failed') {
-    return { success: false, error: prediction.error || 'Model failed' };
-  }
-
   if (prediction.id) {
+    // Si no terminó, hacemos polling
     const pollUrl = prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`;
-    const result = await pollPrediction(pollUrl);
-    if (result.status === 'succeeded' && result.output) {
-      const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
-      return { success: true, outputUrl };
-    }
-    return { success: false, error: result.error || 'Generation failed' };
+    return await pollPrediction(pollUrl);
   }
 
-  return { success: false, error: 'Unexpected response' };
+  return { success: false, error: 'Unexpected response or failure' };
 }
 
 async function pollPrediction(url) {
-  const maxAttempts = 40;
+  const maxAttempts = 60; // Esperamos más tiempo (3 minutos máx)
   let attempts = 0;
   while (attempts < maxAttempts) {
     const response = await fetch(url, {
@@ -157,25 +149,39 @@ async function pollPrediction(url) {
     });
     const data = await response.json();
     console.log(`[Poll] ${data.status} (${attempts * 3}s)`);
-    if (['succeeded', 'failed', 'canceled'].includes(data.status)) return data;
+    
+    if (data.status === 'succeeded' && data.output) {
+      const outputUrl = Array.isArray(data.output) ? data.output[0] : data.output;
+      return { success: true, outputUrl };
+    }
+    if (['failed', 'canceled'].includes(data.status)) {
+      return { success: false, error: data.error || 'Prediction failed' };
+    }
+    
     attempts++;
     await new Promise(r => setTimeout(r, 3000));
   }
-  return { status: 'failed', error: 'Timed out' };
+  return { success: false, error: 'Timed out' };
 }
 
 // ==========================================
-// EL NUEVO PROMPT (SIN BARBAS, SIN CAMBIOS DE CARA)
+// PROMPTS OPTIMIZADOS PARA MANTENER LA CARA
 // ==========================================
 function buildHairPrompt(style, density, hairline) {
   const densityDesc = {
-    low: 'a subtle, natural amount of',
-    medium: 'a full, thick head of',
-    high: 'very thick, abundant'
+    low: 'a natural, subtle amount of new',
+    medium: 'a full, healthy head of',
+    high: 'very thick, dense'
   };
+  
+  // El prompt enfatiza que es la MISMA persona
+  return `A photorealistic portrait of the EXACT SAME man from the original image, but now with ${densityDesc[density] || densityDesc.medium} hair on his scalp. The hair is completely natural looking and matches his original hair color. Crucially, his face, eyes, nose, mouth, skin texture, wrinkles, expression, and the background remain 100% IDENTICAL to the input photo. No changes to his facial features. High detail, 8k.`;
+}
 
-  // Cero palabras prohibidas. Describimos exactamente qué mantener intacto.
-  return `A photorealistic, high-quality portrait of this exact person. Add ${densityDesc[density] || densityDesc.medium} hair strictly to the top of the scalp, forehead, and temples to cover any baldness. The new hair perfectly matches their original natural hair color and texture. The person's jawline, chin, face, skin, expression, and the background must remain absolutely 100% identical to the original input image. Clean shaven areas must remain clean shaven. Highly detailed, 8k, seamless transition.`;
+// NUEVA FUNCIÓN: Prompt Negativo para prohibir cambios
+function buildNegativePrompt() {
+  // Lista explícita de cosas que NO debe hacer
+  return "changed face, different person, altered facial features, plastic surgery, distorted face, blurry, cartoon, painting, ugly, deformed, extra fingers, changes to eyes, changes to nose, changes to mouth, beard change";
 }
 
 app.get('*', (req, res) => {
@@ -184,7 +190,7 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
-  console.log(`🎯 Model: Flux Kontext Pro (with retry & optimized prompt)`);
+  console.log(`🎯 Model: SDXL Realism (Face Preservation Mode)`);
   console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
   console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
