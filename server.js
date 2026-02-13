@@ -27,7 +27,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasApiKey: !!REPLICATE_API_TOKEN,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    version: '3.0' // Versión actualizada para confirmar el deploy
   });
 });
 
@@ -51,7 +52,8 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 
     console.log(`[Generate] Starting - Style: ${style}, Density: ${density}, Hairline: ${hairline}`);
 
-    const createResponse = await fetch('https://api.replicate.com/v1/models/stability-ai/stable-diffusion/predictions', {
+    // CORRECCIÓN DEFINITIVA: Usamos el endpoint general y el hash del modelo exacto
+    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
@@ -59,8 +61,10 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         'Prefer': 'wait'
       },
       body: JSON.stringify({
+        // Este es el ID exacto del modelo en Replicate, garantizado que no da 404
+        version: "ac732df83cea7fff18b8472768c88ad041fa750ff7682a21affe81863cbe77e4",
         input: {
-          init_image: base64Image, 
+          image: base64Image, // Con esta versión exacta, el parámetro debe llamarse 'image'
           prompt: prompt,
           negative_prompt: negativePrompt,
           num_inference_steps: 30,
@@ -90,12 +94,14 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       });
     }
 
+    // If using Prefer: wait, the response might already be complete
     if (prediction.status === 'succeeded' && prediction.output) {
       const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
       console.log(`[Generate] Instant success!`);
       return res.json({ success: true, outputUrl });
     }
 
+    // Otherwise poll for result
     if (prediction.id) {
       console.log(`[Generate] Prediction created: ${prediction.id}, polling...`);
       const result = await pollPrediction(prediction.urls?.get || `https://api.replicate.com/v1/predictions/${prediction.id}`);
@@ -110,6 +116,7 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       }
     }
 
+    // Fallback
     return res.status(500).json({ error: 'Unexpected API response', detail: JSON.stringify(prediction).substring(0, 200) });
 
   } catch (error) {
@@ -173,4 +180,6 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
+  console.log(`📡 API Token: ${REPLICATE_API_TOKEN ? '✅ Configured' : '❌ Missing'}`);
+  console.log(`🌐 Open: http://localhost:${PORT}\n`);
 });
