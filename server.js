@@ -174,7 +174,7 @@ function buildHairPrompt(density) {
   };
   const d = densityMap[density] || densityMap.medium;
 
-  return `Make this person have ${d} natural hair on top, laying flat and neat, not sticking up. Hair should look like a real short-to-medium men's hairstyle that lays down naturally. Same hair color, same beard, same everything else.`;
+  return `Make this person have ${d} natural hair covering their entire head including the temples and hairline — no receding hairline, no bald spots, full coverage from forehead to crown. The hair should lay flat and neat, not sticking up, like a normal short-to-medium men's hairstyle. Same hair color, same beard, same ears, same everything else. Do not modify the ears at all.`;
 }
 
 app.get('*', (req, res) => {
