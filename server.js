@@ -69,7 +69,7 @@ async function detectHairColorRGB(raw, width, height) {
         const idx = (y * width + x) * 3;
         const r = raw[idx], g = raw[idx+1], b = raw[idx+2];
         const br = (r + g + b) / 3;
-        if (br > 25 && br < 160) pixels.push({ r, g, b, br });
+        if (br > 15 && br < 100) pixels.push({ r, g, b, br });
       }
     }
   }
@@ -343,10 +343,13 @@ function buildPrompt(density, hairColor) {
     high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
-  const colorPart = hairColor
-    ? `The hair must be ${hairColor}.`
-    : '';
-  return `Make this person have ${d} natural hair on top, laying flat and neat. ${colorPart} Same beard, same face, same everything else.`;
+
+  if (hairColor && (hairColor === 'black' || hairColor === 'very dark brown' || hairColor === 'dark brown')) {
+    return `Make this person have ${d} natural BLACK hair on top, laying flat and neat. The hair MUST be black/very dark — NOT brown, NOT blonde, NOT light. Same beard, same face, same everything else.`;
+  } else if (hairColor) {
+    return `Make this person have ${d} natural ${hairColor} hair on top, laying flat and neat. The hair MUST be ${hairColor} — NOT black, NOT darker than the original. Same beard, same face, same everything else.`;
+  }
+  return `Make this person have ${d} natural hair on top, laying flat and neat. Same hair color, same beard, same face, same everything else.`;
 }
 
 app.get('*', (req, res) => {
