@@ -51,172 +51,89 @@ function getAspectRatioString(w, h) {
 }
 
 // ──────────────────────────────────────────────
-// COLOR SAMPLING
-// Sample average hair color from the sides of the original image
-// (where existing hair is) — rows 20-35%, left 5-15% and right 85-95%
+// HAIR COLOR DETECTION
+// Sample dark pixels from sides of image (where hair is)
+// Filter out bright pixels (background, windows, skin)
 // ──────────────────────────────────────────────
-async function sampleHairColor(rawBuffer, width, height) {
-  const y1 = Math.round(height * 0.20);
-  const y2 = Math.round(height * 0.35);
-  const xLeftStart = Math.round(width * 0.03);
-  const xLeftEnd = Math.round(width * 0.15);
-  const xRightStart = Math.round(width * 0.85);
-  const xRightEnd = Math.round(width * 0.97);
+async function detectHairColor(buffer, width, height) {
+  const raw = await sharp(buffer).raw().toBuffer();
 
-  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+  const y1 = Math.round(height * 0.15);
+  const y2 = Math.round(height * 0.40);
+  const xLeftStart = Math.round(width * 0.02);
+  const xLeftEnd = Math.round(width * 0.18);
+  const xRightStart = Math.round(width * 0.82);
+  const xRightEnd = Math.round(width * 0.98);
+
+  const pixels = [];
 
   for (let y = y1; y < y2; y++) {
-    for (let x = xLeftStart; x < xLeftEnd; x++) {
-      const idx = (y * width + x) * 3;
-      const r = rawBuffer[idx], g = rawBuffer[idx+1], b = rawBuffer[idx+2];
-      const brightness = (r + g + b) / 3;
-      // Only sample dark-ish pixels (likely hair, not bright background/windows/skin)
-      if (brightness > 30 && brightness < 140) {
-        rSum += r; gSum += g; bSum += b; count++;
-      }
-    }
-    for (let x = xRightStart; x < xRightEnd; x++) {
-      const idx = (y * width + x) * 3;
-      const r = rawBuffer[idx], g = rawBuffer[idx+1], b = rawBuffer[idx+2];
-      const brightness = (r + g + b) / 3;
-      if (brightness > 30 && brightness < 140) {
-        rSum += r; gSum += g; bSum += b; count++;
+    const scanRegions = [
+      [xLeftStart, xLeftEnd],
+      [xRightStart, xRightEnd]
+    ];
+    for (const [xs, xe] of scanRegions) {
+      for (let x = xs; x < xe; x++) {
+        const idx = (y * width + x) * 3;
+        const r = raw[idx], g = raw[idx+1], b = raw[idx+2];
+        const brightness = (r + g + b) / 3;
+        // Hair pixels: not too bright (skin/background) not too dark (pure black areas)
+        if (brightness > 25 && brightness < 160) {
+          pixels.push({ r, g, b, brightness });
+        }
       }
     }
   }
 
-  // If not enough dark pixels found, disable color correction
-  if (count < 50) {
-    console.log(`[Color] Not enough hair pixels found (${count}), skipping correction`);
+  if (pixels.length < 30) {
+    console.log(`[HairColor] Only ${pixels.length} hair pixels, can't determine color`);
     return null;
   }
 
-  return {
-    r: Math.round(rSum / count),
-    g: Math.round(gSum / count),
-    b: Math.round(bSum / count)
-  };
-}
+  // Sort by brightness, take the middle 50% (avoid outliers)
+  pixels.sort((a, b) => a.brightness - b.brightness);
+  const start = Math.round(pixels.length * 0.25);
+  const end = Math.round(pixels.length * 0.75);
+  const middle = pixels.slice(start, end);
 
-// Sample the color of the AI-generated hair from the top-center area
-async function sampleAIHairColor(rawBuffer, width, height) {
-  const y1 = Math.round(height * 0.05);
-  const y2 = Math.round(height * 0.25);
-  const xStart = Math.round(width * 0.25);
-  const xEnd = Math.round(width * 0.75);
+  const avgR = Math.round(middle.reduce((s, p) => s + p.r, 0) / middle.length);
+  const avgG = Math.round(middle.reduce((s, p) => s + p.g, 0) / middle.length);
+  const avgB = Math.round(middle.reduce((s, p) => s + p.b, 0) / middle.length);
+  const avgBrightness = (avgR + avgG + avgB) / 3;
+  const warmth = avgR - avgB;
 
-  let rSum = 0, gSum = 0, bSum = 0, count = 0;
-
-  for (let y = y1; y < y2; y++) {
-    for (let x = xStart; x < xEnd; x++) {
-      const idx = (y * width + x) * 3;
-      rSum += rawBuffer[idx];
-      gSum += rawBuffer[idx + 1];
-      bSum += rawBuffer[idx + 2];
-      count++;
-    }
-  }
-
-  return {
-    r: Math.round(rSum / count),
-    g: Math.round(gSum / count),
-    b: Math.round(bSum / count)
-  };
-}
-
-// ──────────────────────────────────────────────
-// PIXEL-LEVEL COMPOSITING WITH COLOR CORRECTION
-// 1. Sample original hair color from sides
-// 2. Sample AI hair color from top
-// 3. Calculate color shift needed
-// 4. Apply shift to AI pixels in hair zone
-// 5. Blend: top = color-corrected AI, bottom = original
-// ──────────────────────────────────────────────
-async function compositeHairOnly(originalBuffer, aiBuffer, width, height) {
-  const aiResized = await sharp(aiBuffer)
-    .resize(width, height, { fit: 'fill' })
-    .raw()
-    .toBuffer();
-
-  const originalRaw = await sharp(originalBuffer)
-    .raw()
-    .toBuffer();
-
-  // Sample colors
-  const origColor = await sampleHairColor(originalRaw, width, height);
-  const aiColor = await sampleAIHairColor(aiResized, width, height);
-
-  // Calculate color correction ratios (only if we got valid samples)
-  let rAdj = 1.0, gAdj = 1.0, bAdj = 1.0;
-  if (origColor && aiColor) {
-    const rRatio = origColor.r / Math.max(aiColor.r, 1);
-    const gRatio = origColor.g / Math.max(aiColor.g, 1);
-    const bRatio = origColor.b / Math.max(aiColor.b, 1);
-
-    const clampRatio = (r) => Math.max(0.75, Math.min(1.3, r));
-    rAdj = clampRatio(rRatio);
-    gAdj = clampRatio(gRatio);
-    bAdj = clampRatio(bRatio);
-
-    console.log(`[Color] Original hair: RGB(${origColor.r},${origColor.g},${origColor.b})`);
-    console.log(`[Color] AI hair: RGB(${aiColor.r},${aiColor.g},${aiColor.b})`);
-    console.log(`[Color] Correction: R=${rAdj.toFixed(2)} G=${gAdj.toFixed(2)} B=${bAdj.toFixed(2)}`);
+  // Map to natural hair color name
+  let colorName;
+  if (avgBrightness > 150) {
+    colorName = 'light blonde';
+  } else if (avgBrightness > 120) {
+    colorName = warmth > 20 ? 'dark blonde' : 'light ash brown';
+  } else if (avgBrightness > 95) {
+    colorName = warmth > 15 ? 'medium brown' : 'medium ash brown';
+  } else if (avgBrightness > 70) {
+    colorName = warmth > 10 ? 'brown' : 'dark brown';
+  } else if (avgBrightness > 45) {
+    colorName = 'very dark brown';
   } else {
-    console.log(`[Color] Skipping correction — insufficient hair samples`);
+    colorName = 'black';
   }
 
-  // Composite with color correction
-  const pixels = width * height * 3;
-  const output = Buffer.alloc(pixels);
-
-  const blendStart = Math.round(height * 0.30);
-  const blendEnd = Math.round(height * 0.45);
-  const blendRange = blendEnd - blendStart;
-
-  for (let y = 0; y < height; y++) {
-    let aiWeight;
-    if (y < blendStart) {
-      aiWeight = 1.0;
-    } else if (y >= blendEnd) {
-      aiWeight = 0.0;
-    } else {
-      const t = (y - blendStart) / blendRange;
-      aiWeight = 0.5 + 0.5 * Math.cos(Math.PI * t);
-    }
-
-    const origWeight = 1.0 - aiWeight;
-
-    for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 3;
-
-      // Color-correct the AI pixels (only where aiWeight > 0)
-      let aiR = aiResized[idx];
-      let aiG = aiResized[idx + 1];
-      let aiB = aiResized[idx + 2];
-
-      if (aiWeight > 0) {
-        // Only color-correct darker pixels (likely hair, not background/skin)
-        const brightness = (aiR + aiG + aiB) / 3;
-        if (brightness < 180) { // skip very bright pixels (background, skin highlights)
-          aiR = Math.min(255, Math.round(aiR * rAdj));
-          aiG = Math.min(255, Math.round(aiG * gAdj));
-          aiB = Math.min(255, Math.round(aiB * bAdj));
-        }
-      }
-
-      output[idx]     = Math.round(aiR * aiWeight + originalRaw[idx]     * origWeight);
-      output[idx + 1] = Math.round(aiG * aiWeight + originalRaw[idx + 1] * origWeight);
-      output[idx + 2] = Math.round(aiB * aiWeight + originalRaw[idx + 2] * origWeight);
-    }
+  // Check for reddish
+  if (avgR > avgG * 1.25 && avgR > avgB * 1.4 && avgBrightness > 50 && avgBrightness < 140) {
+    colorName = avgBrightness > 95 ? 'auburn' : 'dark auburn';
   }
 
-  return sharp(output, { raw: { width, height, channels: 3 } })
-    .jpeg({ quality: 93 })
-    .toBuffer();
+  // Check for gray
+  if (Math.abs(avgR - avgG) < 10 && Math.abs(avgG - avgB) < 10 && avgBrightness > 80 && avgBrightness < 160) {
+    colorName = 'gray';
+  }
+
+  console.log(`[HairColor] Detected: ${colorName} (RGB: ${avgR},${avgG},${avgB} brightness: ${Math.round(avgBrightness)} warmth: ${Math.round(warmth)} from ${middle.length} pixels)`);
+  return colorName;
 }
 
 // ──────────────────────────────────────────────
-// AI MODEL INTERACTION
+// AI MODELS
 // ──────────────────────────────────────────────
 
 const MODELS = [
@@ -236,14 +153,19 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
     const density = req.body.density || 'medium';
 
     // Step 1: Normalize (fix EXIF rotation)
-    const { buffer: originalBuffer, width, height } = await normalizeImage(req.file.buffer);
-    const base64Image = `data:image/jpeg;base64,${originalBuffer.toString('base64')}`;
+    const { buffer: normalizedBuffer, width, height } = await normalizeImage(req.file.buffer);
+    const base64Image = `data:image/jpeg;base64,${normalizedBuffer.toString('base64')}`;
     const aspectRatio = getAspectRatioString(width, height);
 
-    const prompt = buildPrompt(density);
-    console.log(`[Generate] ${width}x${height} (${aspectRatio}), Density: ${density}`);
+    // Step 2: Detect hair color from original photo
+    const hairColor = await detectHairColor(normalizedBuffer, width, height);
 
-    // Step 2: Generate with Flux Kontext
+    // Step 3: Build prompt with detected color
+    const prompt = buildPrompt(density, hairColor);
+    console.log(`[Generate] ${width}x${height} (${aspectRatio}), Color: ${hairColor}`);
+    console.log(`[Generate] Prompt: ${prompt}`);
+
+    // Step 4: Generate
     let aiOutputUrl = null;
     let usedModel = null;
 
@@ -270,35 +192,11 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'AI models busy. Try again.' });
     }
 
-    // Step 3: Download AI result
-    console.log(`[Composite] Downloading AI result...`);
-    let aiBuffer;
-    try {
-      const aiResponse = await fetch(aiOutputUrl);
-      if (!aiResponse.ok) throw new Error(`HTTP ${aiResponse.status}`);
-      aiBuffer = Buffer.from(await aiResponse.arrayBuffer());
-      console.log(`[Composite] Downloaded ${aiBuffer.length} bytes`);
-    } catch (dlErr) {
-      console.log(`[Composite] Download failed, returning raw URL`);
-      return res.json({ success: true, outputUrl: aiOutputUrl, model: usedModel });
-    }
-
-    // Step 4: Color-correct + Composite
-    console.log(`[Composite] Color correcting and blending...`);
-    const finalBuffer = await compositeHairOnly(originalBuffer, aiBuffer, width, height);
-
-    // Step 5: Return as base64
-    const finalBase64 = `data:image/jpeg;base64,${finalBuffer.toString('base64')}`;
-    console.log(`[Generate] ✅ Done! ${usedModel} + color-corrected composite`);
-
-    return res.json({
-      success: true,
-      outputUrl: finalBase64,
-      model: usedModel
-    });
+    console.log(`[Generate] ✅ Done with ${usedModel}`);
+    return res.json({ success: true, outputUrl: aiOutputUrl, model: usedModel, hairColor });
 
   } catch (error) {
-    console.error('[Generate] Error:', error.message, error.stack);
+    console.error('[Generate] Error:', error.message);
     res.status(500).json({ error: 'Server error', detail: error.message });
   }
 });
@@ -367,14 +265,24 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
-function buildPrompt(density) {
+// ──────────────────────────────────────────────
+// PROMPT BUILDING
+// Short + specific. Include detected hair color directly.
+// ──────────────────────────────────────────────
+function buildPrompt(density, hairColor) {
   const densityMap = {
     low: 'a natural amount of',
     medium: 'a full head of',
     high: 'thick, dense'
   };
   const d = densityMap[density] || densityMap.medium;
-  return `Make this person have ${d} natural hair on top. Same hair color, same beard, same everything else.`;
+
+  // If we detected a color, specify it explicitly
+  const colorPart = hairColor
+    ? `The hair must be ${hairColor} — NOT black, NOT darker than the original.`
+    : `Same hair color as existing hair — NOT darker.`;
+
+  return `Make this person have ${d} natural hair on top, laying flat and neat. ${colorPart} Same beard, same face, same everything else.`;
 }
 
 app.get('*', (req, res) => {
@@ -384,8 +292,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
   console.log(`🎯 AI: Flux Kontext Max > Pro`);
-  console.log(`🎨 Color correction: sample sides → match AI hair`);
-  console.log(`🎭 Composite: top=AI hair, bottom=original photo`);
+  console.log(`🎨 Hair color detection: smart pixel sampling (dark pixels only)`);
   console.log(`📸 EXIF fix: enabled`);
   console.log(`📡 Token: ${REPLICATE_API_TOKEN ? '✅' : '❌'}`);
   console.log(`🌐 http://localhost:${PORT}\n`);
