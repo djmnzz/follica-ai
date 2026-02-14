@@ -81,11 +81,11 @@ async function detectHairColorRGB(raw, width, height) {
   const e = Math.round(pixels.length * 0.75);
   const mid = pixels.slice(s, e);
 
-  const avgR = Math.round(mid.reduce((s, p) => s + p.r, 0) / mid.length);
-  const avgG = Math.round(mid.reduce((s, p) => s + p.g, 0) / mid.length);
-  const avgB = Math.round(mid.reduce((s, p) => s + p.b, 0) / mid.length);
+  const avgR = Math.round(mid.reduce((sum, p) => sum + p.r, 0) / mid.length);
+  const avgG = Math.round(mid.reduce((sum, p) => sum + p.g, 0) / mid.length);
+  const avgB = Math.round(mid.reduce((sum, p) => sum + p.b, 0) / mid.length);
 
-  console.log(`[HairColor] Detected RGB(${avgR},${avgG},${avgB}) from ${mid.length} pixels`);
+  console.log(`[HairColor] Detected original RGB(${avgR},${avgG},${avgB})`);
   return { r: avgR, g: avgG, b: avgB };
 }
 
@@ -94,7 +94,7 @@ function rgbToColorName(rgb) {
   const br = (rgb.r + rgb.g + rgb.b) / 3;
   const warmth = rgb.r - rgb.b;
 
-  if (br > 150) return 'light blonde';
+  if (br > 150) return 'blonde';
   if (br > 120) return warmth > 20 ? 'dark blonde' : 'light brown';
   if (br > 95) return warmth > 15 ? 'medium brown' : 'ash brown';
   if (br > 70) return 'brown';
@@ -104,14 +104,6 @@ function rgbToColorName(rgb) {
 
 // ──────────────────────────────────────────────
 // ELLIPTICAL COMPOSITING + COLOR CORRECTION
-//
-// Creates a soft elliptical mask centered on the top of head.
-// AI pixels are used inside the ellipse (scalp area).
-// Original pixels are used outside (face, ears, beard, body).
-// Smooth gaussian-like fade at the edge — no visible line.
-//
-// Before compositing, color-correct AI hair pixels to match
-// original hair color detected from the sides.
 // ──────────────────────────────────────────────
 
 async function compositeWithEllipse(originalBuffer, aiBuffer, width, height, origHairRGB) {
@@ -122,58 +114,80 @@ async function compositeWithEllipse(originalBuffer, aiBuffer, width, height, ori
 
   const originalRaw = await sharp(originalBuffer).raw().toBuffer();
 
-  // Ellipse parameters — centered on top of head
   const cx = width / 2;
-  const cy = height * 0.20;        // center near top of head
-  const rx = width * 0.38;          // wide enough for temples
-  const ry = height * 0.23;         // tall enough for crown
-  const fadeWidth = 0.35;            // how wide the soft edge is (0-1, relative to radius)
+  const cy = height * 0.20;
+  const rx = width * 0.38;
+  const ry = height * 0.23;
+  const fadeWidth = 0.35;
 
-  // Color correction: sample AI hair from top-center
-  // No color correction — let the AI color stand as-is.
-  // The elliptical composite protects face/beard/ears.
   let rAdj = 1, gAdj = 1, bAdj = 1;
 
-  // Composite pixel by pixel
+  // CORRECCIÓN DE COLOR ACTIVADA: Calculamos el tono del cabello generado por la IA
+  if (origHairRGB) {
+    let aiR = 0, aiG = 0, aiB = 0, aiCount = 0;
+    
+    // Muestreamos el centro de la cabeza en la imagen de la IA
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const dx = (x - cx) / (rx * 0.5); // Solo el núcleo duro
+        const dy = (y - cy) / (ry * 0.5);
+        if (dx * dx + dy * dy <= 1.0) {
+          const idx = (y * width + x) * 3;
+          aiR += aiResized[idx]; aiG += aiResized[idx+1]; aiB += aiResized[idx+2];
+          aiCount++;
+        }
+      }
+    }
+
+    if (aiCount > 0) {
+      aiR /= aiCount; aiG /= aiCount; aiB /= aiCount;
+      
+      // Calculamos cuánto hay que ajustar la IA para que coincida con el original
+      rAdj = origHairRGB.r / Math.max(1, aiR);
+      gAdj = origHairRGB.g / Math.max(1, aiG);
+      bAdj = origHairRGB.b / Math.max(1, aiB);
+
+      // Limitamos el ajuste para evitar colores radioactivos si la IA se equivocó mucho
+      rAdj = Math.min(Math.max(rAdj, 0.8), 1.2);
+      gAdj = Math.min(Math.max(gAdj, 0.8), 1.2);
+      bAdj = Math.min(Math.max(bAdj, 0.8), 1.2);
+      console.log(`[ColorMatch] Applied adjustment multipliers: R:${rAdj.toFixed(2)} G:${gAdj.toFixed(2)} B:${bAdj.toFixed(2)}`);
+    }
+  }
+
   const output = Buffer.alloc(width * height * 3);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = (y * width + x) * 3;
 
-      // Calculate distance from ellipse center (normalized 0-1 where 1 = on edge)
       const dx = (x - cx) / rx;
       const dy = (y - cy) / ry;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // Calculate blend weight (1 = full AI, 0 = full original)
       let aiWeight;
       if (dist <= 1.0 - fadeWidth) {
-        aiWeight = 1.0; // inside ellipse core
+        aiWeight = 1.0;
       } else if (dist >= 1.0 + fadeWidth) {
-        aiWeight = 0.0; // outside ellipse
+        aiWeight = 0.0;
       } else {
-        // Smooth cosine fade in the transition zone
         const t = (dist - (1.0 - fadeWidth)) / (2 * fadeWidth);
         aiWeight = 0.5 + 0.5 * Math.cos(Math.PI * t);
       }
 
-      // Get original pixel
       const oR = originalRaw[idx], oG = originalRaw[idx+1], oB = originalRaw[idx+2];
-
-      // Get AI pixel (color-corrected if in hair zone)
       let aR = aiResized[idx], aG = aiResized[idx+1], aB = aiResized[idx+2];
-      if (aiWeight > 0) {
+      
+      if (aiWeight > 0 && origHairRGB) {
         const br = (aR + aG + aB) / 3;
-        // Only color-correct mid-tone pixels (actual hair, not very bright/dark)
-        if (br > 30 && br < 200) {
+        // Solo aplicar color a tonos medios (el cabello), proteger brillos extremos
+        if (br > 20 && br < 220) {
           aR = Math.min(255, Math.round(aR * rAdj));
           aG = Math.min(255, Math.round(aG * gAdj));
           aB = Math.min(255, Math.round(aB * bAdj));
         }
       }
 
-      // Blend
       const w2 = 1.0 - aiWeight;
       output[idx]     = Math.round(aR * aiWeight + oR * w2);
       output[idx + 1] = Math.round(aG * aiWeight + oG * w2);
@@ -206,26 +220,24 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
 
     const density = req.body.density || 'medium';
 
-    // Step 1: Normalize
     const { buffer: origBuffer, width, height } = await normalizeImage(req.file.buffer);
     const base64Image = `data:image/jpeg;base64,${origBuffer.toString('base64')}`;
     const aspectRatio = getAspectRatioString(width, height);
 
-    // Step 2: Detect hair color
     const origRaw = await sharp(origBuffer).raw().toBuffer();
     const hairRGB = await detectHairColorRGB(origRaw, width, height);
     const hairName = rgbToColorName(hairRGB);
 
-    // Step 3: Build prompt
     const prompt = buildPrompt(density, hairName);
     console.log(`[Generate] ${width}x${height}, Color: ${hairName}, Density: ${density}`);
 
-    // Step 4: Generate with Kontext
     let aiOutputUrl = null;
     let usedModel = null;
 
     for (const model of MODELS) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      // Loop simplified for generation
+      let attempt = 1;
+      while (attempt <= 2) {
         console.log(`[Generate] ${model} attempt ${attempt}...`);
         try {
           const result = await runModel(model, base64Image, prompt, aspectRatio);
@@ -237,7 +249,9 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
         } catch (err) {
           console.log(`[Generate] error: ${err.message}`);
         }
-        if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+        if (aiOutputUrl) break;
+        attempt++;
+        await new Promise(r => setTimeout(r, 2000));
       }
       if (aiOutputUrl) break;
     }
@@ -246,7 +260,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       return res.status(500).json({ error: 'AI models busy. Try again.' });
     }
 
-    // Step 5: Download AI result
     let aiBuffer;
     try {
       const resp = await fetch(aiOutputUrl);
@@ -257,7 +270,6 @@ app.post('/api/generate', upload.single('image'), async (req, res) => {
       return res.json({ success: true, outputUrl: aiOutputUrl, model: usedModel });
     }
 
-    // Step 6: Elliptical composite + color correction
     console.log(`[Composite] Elliptical blend + color correction...`);
     const finalBuffer = await compositeWithEllipse(origBuffer, aiBuffer, width, height, hairRGB);
 
@@ -292,19 +304,11 @@ async function runModel(model, image, prompt, aspectRatio) {
   });
 
   const prediction = await createResponse.json();
-  console.log(`[${model}] HTTP ${createResponse.status} | Status: ${prediction.status || 'N/A'}`);
-
-  if (!createResponse.ok) {
-    return { success: false, error: prediction.detail || JSON.stringify(prediction).substring(0, 200) };
-  }
+  if (!createResponse.ok) return { success: false, error: prediction.detail };
 
   if (prediction.status === 'succeeded' && prediction.output) {
     const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
     return { success: true, outputUrl };
-  }
-
-  if (prediction.status === 'failed') {
-    return { success: false, error: prediction.error || 'Model failed' };
   }
 
   if (prediction.id) {
@@ -314,21 +318,16 @@ async function runModel(model, image, prompt, aspectRatio) {
       const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
       return { success: true, outputUrl };
     }
-    return { success: false, error: result.error || 'Generation failed' };
   }
-
-  return { success: false, error: 'Unexpected response' };
+  return { success: false, error: 'Model failed' };
 }
 
 async function pollPrediction(url) {
   const maxAttempts = 40;
   let attempts = 0;
   while (attempts < maxAttempts) {
-    const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
-    });
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` } });
     const data = await response.json();
-    console.log(`[Poll] ${data.status} (${attempts * 3}s)`);
     if (['succeeded', 'failed', 'canceled'].includes(data.status)) return data;
     attempts++;
     await new Promise(r => setTimeout(r, 3000));
@@ -336,6 +335,9 @@ async function pollPrediction(url) {
   return { status: 'failed', error: 'Timed out' };
 }
 
+// ──────────────────────────────────────────────
+// EL NUEVO PROMPT INTELIGENTE
+// ──────────────────────────────────────────────
 function buildPrompt(density, hairColor) {
   const densityMap = {
     low: 'a natural amount of',
@@ -344,12 +346,10 @@ function buildPrompt(density, hairColor) {
   };
   const d = densityMap[density] || densityMap.medium;
 
-  if (hairColor && (hairColor === 'black' || hairColor === 'very dark brown' || hairColor === 'dark brown')) {
-    return `Make this person have ${d} natural BLACK hair on top, laying flat and neat. The hair MUST be black/very dark — NOT brown, NOT blonde, NOT light. Same beard, same face, same everything else.`;
-  } else if (hairColor) {
-    return `Make this person have ${d} natural ${hairColor} hair on top, laying flat and neat. The hair MUST be ${hairColor} — NOT black, NOT darker than the original. Same beard, same face, same everything else.`;
-  }
-  return `Make this person have ${d} natural hair on top, laying flat and neat. Same hair color, same beard, same face, same everything else.`;
+  // En lugar de obligar colores opuestos, le pedimos que respete el tono original
+  const colorStr = hairColor ? `perfectly matching their original ${hairColor} hair color` : 'perfectly matching their original hair color';
+
+  return `Make this person have ${d} natural hair on top, laying flat and neat. The new hair MUST be ${colorStr}. Keep the exact same shade as the hair on the sides. Same beard, same face, same everything else. No color changes.`;
 }
 
 app.get('*', (req, res) => {
@@ -359,9 +359,7 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Follica AI Server running on port ${PORT}`);
   console.log(`🎯 AI: Flux Kontext Max > Pro`);
-  console.log(`🎨 Color: detect from sides → correct AI pixels`);
-  console.log(`🎭 Composite: soft ellipse (no visible lines)`);
-  console.log(`📸 EXIF fix: enabled`);
-  console.log(`📡 Token: ${REPLICATE_API_TOKEN ? '✅' : '❌'}`);
+  console.log(`🎨 Color: Smart Detection + Mathematical Correction Enabled ✅`);
+  console.log(`🎭 Composite: soft ellipse`);
   console.log(`🌐 http://localhost:${PORT}\n`);
 });
