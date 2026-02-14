@@ -130,40 +130,9 @@ async function compositeWithEllipse(originalBuffer, aiBuffer, width, height, ori
   const fadeWidth = 0.35;            // how wide the soft edge is (0-1, relative to radius)
 
   // Color correction: sample AI hair from top-center
+  // No color correction — let the AI color stand as-is.
+  // The elliptical composite protects face/beard/ears.
   let rAdj = 1, gAdj = 1, bAdj = 1;
-  if (origHairRGB) {
-    let arSum = 0, agSum = 0, abSum = 0, ac = 0;
-    const sy1 = Math.round(height * 0.05);
-    const sy2 = Math.round(height * 0.20);
-    const sx1 = Math.round(width * 0.30);
-    const sx2 = Math.round(width * 0.70);
-    for (let y = sy1; y < sy2; y++) {
-      for (let x = sx1; x < sx2; x++) {
-        const idx = (y * width + x) * 3;
-        const br = (aiResized[idx] + aiResized[idx+1] + aiResized[idx+2]) / 3;
-        if (br > 20 && br < 180) {
-          arSum += aiResized[idx]; agSum += aiResized[idx+1]; abSum += aiResized[idx+2]; ac++;
-        }
-      }
-    }
-    if (ac > 50) {
-      const aiR = arSum / ac, aiG = agSum / ac, aiB = abSum / ac;
-      const aiBr = (aiR + aiG + aiB) / 3;
-      const origBr = (origHairRGB.r + origHairRGB.g + origHairRGB.b) / 3;
-
-      // ONLY correct if AI is darker than original (Kontext's main bias)
-      // Never darken the AI result
-      if (aiBr < origBr * 0.85) {
-        const clamp = (v) => Math.max(1.0, Math.min(1.4, v)); // only lighten, never darken
-        rAdj = clamp(origHairRGB.r / Math.max(aiR, 1));
-        gAdj = clamp(origHairRGB.g / Math.max(aiG, 1));
-        bAdj = clamp(origHairRGB.b / Math.max(aiB, 1));
-        console.log(`[Color] AI too dark (${Math.round(aiBr)} vs ${Math.round(origBr)}), lightening R×${rAdj.toFixed(2)} G×${gAdj.toFixed(2)} B×${bAdj.toFixed(2)}`);
-      } else {
-        console.log(`[Color] AI color OK (${Math.round(aiBr)} vs orig ${Math.round(origBr)}), no correction needed`);
-      }
-    }
-  }
 
   // Composite pixel by pixel
   const output = Buffer.alloc(width * height * 3);
